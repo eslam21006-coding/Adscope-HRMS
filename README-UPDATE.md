@@ -17,3 +17,4 @@ This build replaces raw JSON and database messages with clear English across:
 4. After deployment completes, reopen `https://hrms.adscope.net/admin/` and refresh.
 
 No Supabase changes are required for this update.
+Git deployment connected.
