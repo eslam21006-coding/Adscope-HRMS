@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <meta name="theme-color" content="#071629" />
+  <title>Adscope HRMS</title>
+  <style>
+    :root{color-scheme:dark}*{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;background:#071629;color:#fff;font:16px/1.5 Inter,Arial,sans-serif}.card{max-width:620px;padding:38px;border:1px solid #263a53;border-radius:24px;background:#0d2038;box-shadow:0 24px 80px #0008}.mark{width:56px;height:56px;display:grid;place-items:center;border-radius:16px;background:#c9a557;color:#071629;font-weight:900;font-size:28px}h1{margin:20px 0 8px;font-size:34px}p{color:#b9c7d8}.actions{display:flex;gap:12px;flex-wrap:wrap;margin-top:28px}a{padding:12px 18px;border-radius:12px;text-decoration:none;font-weight:800}.primary{background:#c9a557;color:#071629}.secondary{border:1px solid #405570;color:#fff}
+  </style>
+</head>
+<body>
+  <main class="card">
+    <div class="mark">A</div>
+    <h1>Adscope HRMS</h1>
+    <p>Secure cloud access for administration and employee attendance.</p>
+    <div class="actions">
+      <a class="primary" href="/admin/">Open Admin Portal</a>
+      <a class="secondary" href="/attendance/">Open Attendance Portal</a>
+    </div>
+  </main>
+  <script>
+    const host = location.hostname.toLowerCase();
+    if (host.startsWith('attendance.')) location.replace('/attendance/');
+    if (host.startsWith('hrms.')) location.replace('/admin/');
+  </script>
+</body>
+</html>
