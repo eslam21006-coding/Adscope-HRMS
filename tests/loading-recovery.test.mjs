@@ -219,6 +219,7 @@ test('Vercel routing keeps employee access available during the portal-domain tr
   ))
   const rootLoader = readFileSync(new URL('../index.html', import.meta.url), 'utf8')
   assert.match(rootLoader, /host === 'attendance\.adscope\.net'\) location\.replace\('\/attendance\//)
+  assert.match(rootLoader, /host === 'portal\.adscope\.net'\) location\.replace\('\/attendance\/' \+ location\.search \+ location\.hash\)/)
   assert.doesNotMatch(rootLoader, /host === 'attendance\.adscope\.net'[\s\S]*?location\.replace\('https:\/\/portal\.adscope\.net/)
   assert.equal(config.headers[0].headers.find(header => header.key === 'Strict-Transport-Security').value, 'max-age=31536000')
 })
