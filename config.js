@@ -5,6 +5,5 @@ window.ADSCOPE_CONFIG = Object.freeze({
   organizationName: 'Adscope Consulting',
   timezone: 'Africa/Cairo',
   adminPath: '/admin/',
-  attendancePath: '/attendance/',
   employeePortalUrl: 'https://portal.adscope.net/'
 });

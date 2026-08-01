@@ -61,9 +61,30 @@ const INITIALIZATION_RECOVERY_PATCH = String.raw`<script data-adscope-init-recov
   var settled=false;
   var watchdog;
   var observer;
+  var initializationRoot=null;
 
   function initializationPending(){
-    return !settled&&Boolean(document.querySelector('.loading'));
+    return !settled;
+  }
+
+  function initializationRendered(){
+    return Boolean(initializationRoot&&initializationRoot.querySelector('.login-page,.shell,.page'));
+  }
+
+  function markInitializationComplete(){
+    if(settled||!initializationRendered())return;
+    settled=true;
+    if(watchdog)window.clearTimeout(watchdog);
+    if(observer)observer.disconnect();
+  }
+
+  function observeInitializationRoot(){
+    if(settled)return;
+    initializationRoot=document.getElementById('app')||document.getElementById('portalApp');
+    if(!initializationRoot||typeof MutationObserver!=='function')return;
+    observer=new MutationObserver(markInitializationComplete);
+    observer.observe(initializationRoot,{childList:true,subtree:true});
+    markInitializationComplete();
   }
 
   function showInitializationError(){
@@ -100,26 +121,13 @@ const INITIALIZATION_RECOVERY_PATCH = String.raw`<script data-adscope-init-recov
     };
   }
 
-  var initializationRoot=document.getElementById('app')||document.getElementById('portalApp');
-  if(initializationRoot&&typeof MutationObserver==='function'){
-    observer=new MutationObserver(function(){
-      if(settled||!initializationRoot.firstElementChild||initializationPending())return;
-      settled=true;
-      if(watchdog)window.clearTimeout(watchdog);
-      observer.disconnect();
-    });
-    observer.observe(initializationRoot,{childList:true,subtree:true});
-  }
+  observeInitializationRoot();
+  if(!initializationRoot)document.addEventListener('DOMContentLoaded',observeInitializationRoot,{once:true});
 
   watchdog=window.setTimeout(function(){
     if(initializationPending())showInitializationError();
   },timeoutMs);
 
-  window.addEventListener('unhandledrejection',function(event){
-    if(!initializationPending())return;
-    event.preventDefault();
-    showInitializationError();
-  });
 })();
 </script>`
 
@@ -164,8 +172,9 @@ const UX_PATCH = String.raw`<script data-adscope-ux-patch="english-errors-v2">
     window.setTimeout(function(){node.remove();},8000);
   }
 
-  function reenableVisibleSubmitButtons(){
-    document.querySelectorAll('form button[type="submit"][disabled]').forEach(function(button){
+  function reenableVisibleSubmitButtons(form){
+    if(!form||!form.querySelectorAll)return;
+    form.querySelectorAll('button[type="submit"][disabled]').forEach(function(button){
       button.disabled=false;
       button.removeAttribute('aria-busy');
     });
@@ -184,7 +193,6 @@ const UX_PATCH = String.raw`<script data-adscope-ux-patch="english-errors-v2">
         item.textContent=friendly;
         item.setAttribute('data-friendly','1');
       }
-      if(/error|could not|failed|invalid|required|expired|permission/i.test(friendly))reenableVisibleSubmitButtons();
     });
   }
 
@@ -217,7 +225,12 @@ const UX_PATCH = String.raw`<script data-adscope-ux-patch="english-errors-v2">
       firstField=firstField||salary;
     }
 
-    var attendanceRequired=attendance&&['true','required','yes','1'].indexOf(String(attendance.value||'').toLowerCase())>=0;
+    var attendanceRequired=false;
+    if(attendance){
+      attendanceRequired=attendance.type==='checkbox'
+        ?Boolean(attendance.checked)
+        :['true','required','yes','1','on'].indexOf(String(attendance.value||'').toLowerCase())>=0;
+    }
     if(attendanceRequired&&shift&&!String(shift.value||'').trim()){
       problems.push('Assign a work shift because attendance is marked as Required.');
       firstField=firstField||shift;
@@ -227,16 +240,15 @@ const UX_PATCH = String.raw`<script data-adscope-ux-patch="english-errors-v2">
       event.preventDefault();
       event.stopImmediatePropagation();
       showEnglishError(problems.join(' '),firstField);
-      reenableVisibleSubmitButtons();
+      reenableVisibleSubmitButtons(form);
     }
   },true);
 
-  new MutationObserver(function(mutations){
-    mutations.forEach(function(mutation){
-      mutation.addedNodes.forEach(function(node){normalizeNode(node);});
-      if(mutation.type==='characterData'&&mutation.target.parentElement)normalizeNode(mutation.target.parentElement);
-    });
-  }).observe(document.documentElement,{subtree:true,childList:true,characterData:true});
+  var uxObserver=new MutationObserver(function(mutations){
+    mutations.forEach(function(mutation){mutation.addedNodes.forEach(function(node){normalizeNode(node);});});
+  });
+  var observedRoots=[document.getElementById('toastRoot'),document.getElementById('app'),document.getElementById('portalApp')].filter(Boolean);
+  observedRoots.forEach(function(root){uxObserver.observe(root,{subtree:true,childList:true});});
 
   document.querySelectorAll('.toast.error,.notice.error,[role="alert"]').forEach(normalizeNode);
   window.ADSCOPE_FRIENDLY_ERROR=friendlyMessage;
@@ -258,9 +270,10 @@ function updateEmployeePortalUrls(html: string) {
 function injectInitializationRecovery(html: string) {
   if (html.includes('data-adscope-init-recovery="auth-deadlock-v1"')) return html
   const supabaseScript = /(<script\s+src=["']https:\/\/cdn\.jsdelivr\.net\/npm\/@supabase\/supabase-js@[^"']+["']><\/script>)/i
-  const patched = html.replace(supabaseScript, `$1${INITIALIZATION_RECOVERY_PATCH}`)
-  if (patched === html) throw new Error('Supabase client script was not found in the frontend bundle')
-  return patched
+  if (supabaseScript.test(html)) return html.replace(supabaseScript, `$1${INITIALIZATION_RECOVERY_PATCH}`)
+  if (/<\/head>/i.test(html)) return html.replace(/<\/head>/i, `${INITIALIZATION_RECOVERY_PATCH}</head>`)
+  if (/<body\b/i.test(html)) return html.replace(/<body\b/i, `${INITIALIZATION_RECOVERY_PATCH}<body`)
+  return `${INITIALIZATION_RECOVERY_PATCH}${html}`
 }
 
 Deno.serve(async (req) => {

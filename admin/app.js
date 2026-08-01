@@ -469,20 +469,35 @@
     const { data:{session} } = await client.auth.getSession();
     state.session=session;
     if(!session)return loginView();
-    try{await loadContext();await render();}catch(error){await client.auth.signOut();loginView(error.message);}
+    try{await loadContext();await render();}catch(error){initializationErrorView(error);}
+  }
+
+  let booting=null;
+  function bootOnce(){
+    if(booting)return booting;
+    booting=boot().finally(()=>{booting=null;});
+    return booting;
+  }
+
+  function initializationErrorView(error){
+    app.innerHTML=`<main class="login-page"><section class="login-card" role="alert"><h1>Unable to open the dashboard</h1><p>${esc(humanizeError(error))}</p><div class="button-row"><button class="primary" id="retryInitialization">Retry</button><button class="ghost" id="initializationLogout">Log out</button></div></section></main>`;
+    document.getElementById('retryInitialization').onclick=()=>bootOnce();
+    document.getElementById('initializationLogout').onclick=()=>client.auth.signOut();
   }
 
   client.auth.onAuthStateChange((event,session)=>{
     window.setTimeout(async()=>{
+      const previousUserId=state.session?.user?.id;
       state.session=session;
       if(event==='SIGNED_OUT'||!session)return loginView();
       if(event==='PASSWORD_RECOVERY'){
         showModal('Set a new password',`<form><label class="field"><span>New password</span><input name="password" type="password" minlength="8" required></label><button class="primary" type="submit">Update password</button></form>`,async e=>{e.preventDefault();const{error}=await client.auth.updateUser({password:new FormData(e.currentTarget).get('password')});if(error)return toast(humanizeError(error),'error');closeModal();toast('Password updated.','success');});
         return;
       }
-      try{await loadContext();await render();}catch(error){loginView(humanizeError(error));}
+      if(previousUserId===session.user.id&&state.membership)return;
+      try{await bootOnce();}catch(error){initializationErrorView(error);}
     },0);
   });
 
-  boot();
+  bootOnce();
 })();

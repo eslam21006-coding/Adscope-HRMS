@@ -3,12 +3,13 @@ import { createClient, type User } from 'npm:@supabase/supabase-js@2.106.2'
 const ADMIN_ORIGIN = 'https://hrms.adscope.net'
 const EMPLOYEE_ORIGIN = 'https://portal.adscope.net'
 const LEGACY_EMPLOYEE_ORIGIN = 'https://attendance.adscope.net'
+const EXTRA_ALLOWED_ORIGINS = (Deno.env.get('ADMIN_ACCESS_EXTRA_ORIGINS')??'').split(',').map(value=>value.trim()).filter(Boolean)
 const ROLES = ['owner','hr_admin','payroll_manager','manager','employee','viewer'] as const
 type Role = typeof ROLES[number]
 type Membership = { id:string; organization_id:string; user_id:string; role:Role; is_active:boolean }
 type Employee = { id:string; organization_id:string; user_id:string|null; employee_code:string; full_name:string; email:string|null; position_title:string|null; status:string; employment_type:string; attendance_required:boolean; portal_enabled:boolean }
 
-function originAllowed(origin:string){ return !origin || origin===ADMIN_ORIGIN || origin===EMPLOYEE_ORIGIN || origin===LEGACY_EMPLOYEE_ORIGIN || origin.endsWith('.vercel.app') }
+function originAllowed(origin:string){ return !origin || origin===ADMIN_ORIGIN || origin===EMPLOYEE_ORIGIN || origin===LEGACY_EMPLOYEE_ORIGIN || EXTRA_ALLOWED_ORIGINS.includes(origin) }
 function headers(req:Request){ const origin=req.headers.get('Origin')??''; return {'Access-Control-Allow-Origin':originAllowed(origin)&&origin?origin:ADMIN_ORIGIN,'Access-Control-Allow-Headers':'authorization, x-client-info, apikey, content-type','Access-Control-Allow-Methods':'POST, OPTIONS','Vary':'Origin'} }
 function reply(req:Request,body:unknown,status=200){ return Response.json(body,{status,headers:headers(req)}) }
 function emailOf(v:unknown){ return String(v??'').trim().toLowerCase() }
@@ -67,7 +68,7 @@ Deno.serve(async(req:Request)=>{
         admin.from('organization_memberships').select('id,organization_id,user_id,role,is_active').eq('organization_id',actor.organization_id),allUsers(admin)])
       if(ee)throw ee; if(me)throw me
       const ms=(memberships??[]) as Membership[]; const byId=new Map(users.map(u=>[u.id,u])); const byEmail=new Map(users.filter(u=>u.email).map(u=>[emailOf(u.email),u])); const mbu=new Map(ms.map(m=>[m.user_id,m]))
-      const rows=((employees??[]) as Employee[]).map(e=>{ const u=e.user_id?byId.get(e.user_id):byEmail.get(emailOf(e.email)); const m=u?mbu.get(u.id):undefined; return {employee_id:e.id,employee_code:e.employee_code,full_name:e.full_name,email:e.email,position_title:e.position_title,employee_status:e.status,employment_type:e.employment_type,attendance_required:e.attendance_required,portal_enabled:e.portal_enabled,user_id:u?.id??null,role:m?.role??null,membership_active:m?.is_active??false,access_status:accessStatus(u,m),invited_at:u?.invited_at??null,email_confirmed_at:u?.email_confirmed_at??null,last_sign_in_at:u?.last_sign_in_at??null,is_current_user:u?.id===actorUser.id} })
+      const rows=((employees??[]) as Employee[]).map(e=>{ const emailUser=byEmail.get(emailOf(e.email)); const u=e.user_id?byId.get(e.user_id):emailUser&&mbu.has(emailUser.id)?emailUser:undefined; const m=u?mbu.get(u.id):undefined; return {employee_id:e.id,employee_code:e.employee_code,full_name:e.full_name,email:e.email,position_title:e.position_title,employee_status:e.status,employment_type:e.employment_type,attendance_required:e.attendance_required,portal_enabled:e.portal_enabled,user_id:u?.id??null,role:m?.role??null,membership_active:m?.is_active??false,access_status:accessStatus(u,m),invited_at:u?.invited_at??null,email_confirmed_at:u?.email_confirmed_at??null,last_sign_in_at:u?.last_sign_in_at??null,is_current_user:u?.id===actorUser.id} })
       const linked=new Set(rows.map(r=>r.user_id).filter(Boolean)); const standalone=ms.filter(m=>!linked.has(m.user_id)).map(m=>{const u=byId.get(m.user_id);return{employee_id:null,employee_code:null,full_name:String(u?.user_metadata?.full_name??u?.email??'Administrative account'),email:u?.email??null,position_title:'Administrative account',employee_status:null,employment_type:null,attendance_required:false,portal_enabled:false,user_id:m.user_id,role:m.role,membership_active:m.is_active,access_status:accessStatus(u,m),invited_at:u?.invited_at??null,email_confirmed_at:u?.email_confirmed_at??null,last_sign_in_at:u?.last_sign_in_at??null,is_current_user:m.user_id===actorUser.id}})
       return reply(req,{rows:[...standalone,...rows],assignable_roles:[...ROLES],actor_role:actor.role})
     }
@@ -76,10 +77,12 @@ Deno.serve(async(req:Request)=>{
       const employee=await loadEmployee(admin,actor,uuid(body.employee_id,'Employee')); const role=roleOf(body.role); const email=emailOf(body.email); validEmail(email)
       let user=await findByEmail(admin,email)
       if(user&&employee.user_id&&employee.user_id!==user.id)throw new Error('This email belongs to a different login account.')
-      if(user){ const {data:other}=await admin.from('employees').select('id,full_name').eq('organization_id',actor.organization_id).eq('user_id',user.id).neq('id',employee.id).maybeSingle(); if(other)throw new Error(`This login is already linked to ${other.full_name}.`) }
+      if(user){ const {data:linkedEmployees,error}=await admin.from('employees').select('id,organization_id,full_name').eq('user_id',user.id); if(error)throw error; const crossTenant=(linkedEmployees??[]).find(item=>item.organization_id!==actor.organization_id); if(crossTenant)throw new Error('This email is already linked to another organization.'); const other=(linkedEmployees??[]).find(item=>item.organization_id===actor.organization_id&&item.id!==employee.id); if(other)throw new Error(`This login is already linked to ${other.full_name}.`) }
+      let existingMemberships:Membership[]=[]
+      if(user){ const {data,error}=await admin.from('organization_memberships').select('id,organization_id,user_id,role,is_active').eq('user_id',user.id); if(error)throw error; existingMemberships=(data??[]) as Membership[]; if(existingMemberships.some(m=>m.organization_id!==actor.organization_id))throw new Error('This email is already linked to another organization.') }
       let type='invitation'
       if(user?.email_confirmed_at){ await link(admin,actor,employee,user,role,email); const {error}=await admin.auth.resetPasswordForEmail(email,{redirectTo:destination(role)}); if(error)throw error; type='password_reset' }
-      else{ if(user){ const {error}=await admin.auth.admin.deleteUser(user.id); if(error)throw error } user=await invite(admin,employee,role,email); await link(admin,actor,employee,user,role,email) }
+      else{ if(user){ if(employee.user_id!==user.id&&!existingMemberships.some(m=>m.organization_id===actor.organization_id))throw new Error('An unconfirmed account already exists for this email. Contact an Owner to verify it before reinviting.'); const {error}=await admin.auth.admin.deleteUser(user.id); if(error)throw error; const {error:clearError}=await admin.from('employees').update({user_id:null,portal_enabled:false}).eq('id',employee.id).eq('organization_id',actor.organization_id); if(clearError)throw clearError } user=await invite(admin,employee,role,email); await link(admin,actor,employee,user,role,email) }
       await audit(admin,actor,actorUser.id,'INVITE_USER',user.id,{employee_id:employee.id,email,role,email_type:type},req)
       return reply(req,{ok:true,message:type==='invitation'?`Invitation sent to ${email}.`:`Access activated and a password setup email was sent to ${email}.`})
     }
@@ -97,26 +100,27 @@ Deno.serve(async(req:Request)=>{
     }
 
     if(action==='send_access_email'){
-      const userId=uuid(body.user_id,'User'); const {data:u,error}=await admin.auth.admin.getUserById(userId); if(error||!u.user?.email)throw new Error('Login account not found.')
-      const {data:m}=await admin.from('organization_memberships').select('role').eq('organization_id',actor.organization_id).eq('user_id',userId).single(); const role=(m?.role??'employee') as Role
+      const userId=uuid(body.user_id,'User'); const {data:m,error:membershipError}=await admin.from('organization_memberships').select('role').eq('organization_id',actor.organization_id).eq('user_id',userId).maybeSingle(); if(membershipError)throw membershipError; if(!m)throw new Error('This login does not belong to your organization.')
+      const {data:u,error}=await admin.auth.admin.getUserById(userId); if(error||!u.user?.email)throw new Error('Login account not found.'); const role=m.role as Role
       const {error:reset}=await admin.auth.resetPasswordForEmail(u.user.email,{redirectTo:destination(role)}); if(reset)throw reset
       await audit(admin,actor,actorUser.id,'SEND_PASSWORD_RESET',userId,{email:u.user.email},req); return reply(req,{ok:true,message:`Password setup/reset email sent to ${u.user.email}.`})
     }
 
     if(action==='delete_test'){
       const userId=uuid(body.user_id,'User'); if(userId===actorUser.id)throw new Error('You cannot delete your own account.')
-      const {data:m}=await admin.from('organization_memberships').select('role').eq('organization_id',actor.organization_id).eq('user_id',userId).maybeSingle(); if(m?.role==='owner')throw new Error('Owner accounts cannot be deleted from this action.')
-      const {data:e}=await admin.from('employees').select('id,full_name').eq('organization_id',actor.organization_id).eq('user_id',userId).maybeSingle()
+      const {data:m,error:membershipError}=await admin.from('organization_memberships').select('role').eq('organization_id',actor.organization_id).eq('user_id',userId).maybeSingle(); if(membershipError)throw membershipError; if(!m)throw new Error('This login does not belong to your organization.'); if(m.role==='owner')throw new Error('Owner accounts cannot be deleted from this action.')
+      const {data:e,error:employeeError}=await admin.from('employees').select('id,full_name').eq('organization_id',actor.organization_id).eq('user_id',userId).maybeSingle(); if(employeeError)throw employeeError
       if(e){ const checks=await Promise.all([
         admin.from('attendance_days').select('id',{count:'exact',head:true}).eq('employee_id',e.id),
         admin.from('leave_requests').select('id',{count:'exact',head:true}).eq('employee_id',e.id),
         admin.from('advances').select('id',{count:'exact',head:true}).eq('employee_id',e.id),
         admin.from('violations').select('id',{count:'exact',head:true}).eq('employee_id',e.id),
         admin.from('payroll_items').select('id',{count:'exact',head:true}).eq('employee_id',e.id)])
+        if(checks.some(r=>r.error))throw new Error('Unable to verify employee history. Try again before deleting this login.')
         if(checks.some(r=>(r.count??0)>0))throw new Error('This account has HR or payroll history. Suspend it instead of deleting it.')
         const {error:unlink}=await admin.from('employees').update({user_id:null,portal_enabled:false}).eq('id',e.id); if(unlink)throw unlink
       }
-      await admin.from('organization_memberships').delete().eq('organization_id',actor.organization_id).eq('user_id',userId)
+      const {error:deleteMembershipError}=await admin.from('organization_memberships').delete().eq('organization_id',actor.organization_id).eq('user_id',userId); if(deleteMembershipError)throw deleteMembershipError
       const {error:del}=await admin.auth.admin.deleteUser(userId); if(del)throw del
       await audit(admin,actor,actorUser.id,'DELETE_TEST_USER',userId,{employee_id:e?.id??null},req); return reply(req,{ok:true,message:'Test login deleted. Employee history was not removed.'})
     }
