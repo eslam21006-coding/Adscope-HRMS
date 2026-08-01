@@ -202,11 +202,13 @@ test('Checked-in bundle shapes accept recovery injection and portal URL replacem
   }
 })
 
-test('Vercel routing keeps the new portal URL canonical', () => {
+test('Vercel routing keeps employee access available during the portal-domain transition', () => {
   const config = JSON.parse(readFileSync(new URL('../vercel.json', import.meta.url), 'utf8'))
-  assert.equal(config.redirects[0].destination, 'https://portal.adscope.net/:path*')
   assert.equal(config.rewrites[0].destination, '/attendance/')
   assert.equal(config.rewrites[0].has[0].key, 'host')
+  assert.equal(config.rewrites[0].has[0].value, 'attendance\\.adscope\\.net')
+  assert.equal(config.rewrites[1].destination, '/attendance/')
+  assert.equal(config.rewrites[1].has[0].value, 'portal\\.adscope\\.net')
   assert.equal(config.headers[0].headers.find(header => header.key === 'Strict-Transport-Security').value, 'max-age=31536000')
 })
 
