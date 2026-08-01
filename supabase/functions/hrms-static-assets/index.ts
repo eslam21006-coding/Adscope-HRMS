@@ -53,6 +53,49 @@ async function gzipBase64(text: string) {
 
 const EMPLOYEE_PORTAL_URL = 'https://portal.adscope.net/'
 
+const EMPLOYEE_SAVE_ORDER_MARKER = '<!-- data-adscope-employee-save-order="valid-state-v1" -->'
+const EMPLOYEE_SAVE_ORDER_BLOCK = String.raw`      let employeeId;
+      try {
+        const selectedShift = fd.get('current_shift_id') || null;
+        const compensationChanged = isNew || [
+          String(fd.get('compensation_type')) !== String(employee?.compensation_type),
+          num(fd.get('basic_salary')) !== num(employee?.basic_salary),
+          String(fd.get('payroll_currency')) !== String(employee?.payroll_currency),
+          num(fd.get('default_commission_rate')) !== num(employee?.default_commission_rate),
+          (fd.get('attendance_required') === 'true') !== Boolean(employee?.attendance_required)
+        ].some(Boolean);
+
+        if (isNew) {
+          const insertPayload = { ...common, status:'pending_setup', compensation_type:fd.get('compensation_type'), basic_salary:num(fd.get('basic_salary')), payroll_currency:fd.get('payroll_currency'), default_commission_rate:num(fd.get('default_commission_rate')), attendance_required:fd.get('attendance_required') === 'true', current_shift_id:null };
+          const { data, error } = await client.from('employees').insert(insertPayload).select('id').single();
+          if (error) throw error;
+          employeeId = data.id;
+        } else {
+          const profile = { ...common };
+          delete profile.status;
+          const { error } = await client.from('employees').update(profile).eq('id',employee.id).eq('organization_id',orgId());
+          if (error) throw error;
+          employeeId = employee.id;
+          if (common.status !== 'active' && employee?.status === 'active') {
+            const { error:demotionError } = await client.from('employees').update({ status:common.status }).eq('id',employeeId).eq('organization_id',orgId());
+            if (demotionError) throw demotionError;
+          }
+        }
+
+        if (selectedShift && (isNew || selectedShift !== employee?.current_shift_id)) {
+          const { error } = await client.rpc('assign_employee_shift',{ p_employee_id:employeeId,p_shift_id:selectedShift,p_effective_from:fd.get('shift_effective_from'),p_reason:'Assigned through Adscope HRMS' });
+          if (error) throw error;
+        }
+
+        if (compensationChanged) {
+          const { error } = await client.rpc('set_employee_compensation',{ p_employee_id:employeeId,p_compensation_type:fd.get('compensation_type'),p_basic_salary:num(fd.get('basic_salary')),p_currency:fd.get('payroll_currency'),p_default_commission_rate:num(fd.get('default_commission_rate')),p_attendance_required:fd.get('attendance_required') === 'true',p_effective_from:fd.get('comp_effective_from'),p_reason:'Updated through Adscope HRMS' });
+          if (error) throw error;
+        }
+
+        const { error:statusError } = await client.from('employees').update({ status:common.status }).eq('id',employeeId).eq('organization_id',orgId());
+        if (statusError) throw statusError;
+`
+
 const INITIALIZATION_RECOVERY_PATCH = String.raw`<script data-adscope-init-recovery="auth-deadlock-v1">
 (function(){
   'use strict';
@@ -261,6 +304,24 @@ function injectUxPatch(html: string) {
   return `${html}${UX_PATCH}`
 }
 
+function fixEmployeeSaveOrder(html: string, bundle: string) {
+  if (bundle !== 'admin' || html.includes(EMPLOYEE_SAVE_ORDER_MARKER)) return html
+
+  const start = '      let employeeId;\n      try {\n'
+  const end = "        if (isNew && fd.get('send_invite') === 'true') {"
+  const startIndex = html.indexOf(start)
+  const endIndex = html.indexOf(end, startIndex)
+  if (startIndex < 0 || endIndex < 0) {
+    console.warn('Employee save ordering patch skipped because the Admin bundle shape changed')
+    return html
+  }
+
+  let patched = `${html.slice(0, startIndex)}${EMPLOYEE_SAVE_ORDER_BLOCK}${html.slice(endIndex)}`
+  if (/<\/body>/i.test(patched)) patched = patched.replace(/<\/body>/i, `${EMPLOYEE_SAVE_ORDER_MARKER}</body>`)
+  else patched += EMPLOYEE_SAVE_ORDER_MARKER
+  return patched
+}
+
 function updateEmployeePortalUrls(html: string) {
   return html
     .replaceAll('https://attendance.adscope.net/', EMPLOYEE_PORTAL_URL)
@@ -297,7 +358,8 @@ Deno.serve(async (req) => {
     if (!data?.payload) throw new Error('Compiled bundle is missing')
 
     const originalHtml = await gunzipBase64(String(data.payload))
-    const patchedHtml = injectUxPatch(injectInitializationRecovery(updateEmployeePortalUrls(originalHtml)))
+    const saveOrderHtml = fixEmployeeSaveOrder(originalHtml, bundle)
+    const patchedHtml = injectUxPatch(injectInitializationRecovery(updateEmployeePortalUrls(saveOrderHtml)))
     if (!patchedHtml.includes('data-adscope-init-recovery="auth-deadlock-v1"')) throw new Error('Initialization recovery patch was not applied')
     if (!patchedHtml.includes('data-adscope-ux-patch="english-errors-v2"')) throw new Error('English UX patch was not applied')
     if (patchedHtml.includes('https://attendance.adscope.net')) throw new Error('Legacy employee portal URL is still present')
@@ -311,7 +373,9 @@ Deno.serve(async (req) => {
         'Pragma': 'no-cache',
         'X-Content-Type-Options': 'nosniff',
         'Content-Length': String(new TextEncoder().encode(payload).byteLength),
-        'X-HRMS-Patch': 'auth-deadlock-v1,english-errors-v2',
+        'X-HRMS-Patch': patchedHtml.includes(EMPLOYEE_SAVE_ORDER_MARKER)
+          ? 'auth-deadlock-v1,english-errors-v2,employee-save-order-v1'
+          : 'auth-deadlock-v1,english-errors-v2',
       },
     })
   } catch (error) {
