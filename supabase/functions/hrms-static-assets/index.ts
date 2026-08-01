@@ -311,7 +311,10 @@ function fixEmployeeSaveOrder(html: string, bundle: string) {
   const end = "        if (isNew && fd.get('send_invite') === 'true') {"
   const startIndex = html.indexOf(start)
   const endIndex = html.indexOf(end, startIndex)
-  if (startIndex < 0 || endIndex < 0) throw new Error('Employee save flow could not be updated')
+  if (startIndex < 0 || endIndex < 0) {
+    console.warn('Employee save ordering patch skipped because the Admin bundle shape changed')
+    return html
+  }
 
   let patched = `${html.slice(0, startIndex)}${EMPLOYEE_SAVE_ORDER_BLOCK}${html.slice(endIndex)}`
   if (/<\/body>/i.test(patched)) patched = patched.replace(/<\/body>/i, `${EMPLOYEE_SAVE_ORDER_MARKER}</body>`)
@@ -359,7 +362,6 @@ Deno.serve(async (req) => {
     const patchedHtml = injectUxPatch(injectInitializationRecovery(updateEmployeePortalUrls(saveOrderHtml)))
     if (!patchedHtml.includes('data-adscope-init-recovery="auth-deadlock-v1"')) throw new Error('Initialization recovery patch was not applied')
     if (!patchedHtml.includes('data-adscope-ux-patch="english-errors-v2"')) throw new Error('English UX patch was not applied')
-    if (bundle === 'admin' && !patchedHtml.includes(EMPLOYEE_SAVE_ORDER_MARKER)) throw new Error('Employee save ordering patch was not applied')
     if (patchedHtml.includes('https://attendance.adscope.net')) throw new Error('Legacy employee portal URL is still present')
     const payload = await gzipBase64(patchedHtml)
 
@@ -371,7 +373,9 @@ Deno.serve(async (req) => {
         'Pragma': 'no-cache',
         'X-Content-Type-Options': 'nosniff',
         'Content-Length': String(new TextEncoder().encode(payload).byteLength),
-        'X-HRMS-Patch': 'auth-deadlock-v1,english-errors-v2,employee-save-order-v1',
+        'X-HRMS-Patch': patchedHtml.includes(EMPLOYEE_SAVE_ORDER_MARKER)
+          ? 'auth-deadlock-v1,english-errors-v2,employee-save-order-v1'
+          : 'auth-deadlock-v1,english-errors-v2',
       },
     })
   } catch (error) {

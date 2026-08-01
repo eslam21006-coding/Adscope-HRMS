@@ -229,6 +229,9 @@ test('Employee save patch preserves a valid database state until compensation an
   assert.doesNotMatch(patched.slice(0, compensationIndex), /update\(common\)/)
   assert.match(source, /fixEmployeeSaveOrder\(originalHtml, bundle\)/)
   assert.match(source, /employee-save-order-v1/)
+  assert.match(source, /console\.warn\('Employee save ordering patch skipped/)
+  assert.doesNotMatch(source, /throw new Error\('Employee save flow could not be updated'/)
+  assert.match(source, /patchedHtml\.includes\(EMPLOYEE_SAVE_ORDER_MARKER\)[\s\S]*?employee-save-order-v1/)
 
   const employeeRule = employee => employee.status !== 'active' || (
     Boolean(employee.payroll_currency) &&
