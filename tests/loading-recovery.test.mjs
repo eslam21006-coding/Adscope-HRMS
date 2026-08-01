@@ -249,6 +249,36 @@ test('Employee save patch preserves a valid database state until compensation an
   assert.equal(employeeRule({ ...activeNewEmployeeBeforeShift, current_shift_id:'assigned-shift' }), true)
 })
 
+test('Admin Edge Function failures use the function response body instead of the generic SDK message', async () => {
+  const source = readFileSync(staticFunctionPath, 'utf8')
+  const match = source.match(/const FUNCTION_CALL_PATCH = String\.raw`([\s\S]*?)`\nconst EMPLOYEE_SAVE_ORDER_BLOCK/)
+  assert.ok(match, 'Edge Function error-body patch must be present')
+
+  const context = {
+    client: {
+      functions: {
+        async invoke() {
+          return {
+            data:null,
+            error:{
+              message:'Edge Function returned a non-2xx status code',
+              context:{ async json(){ return { error:'This login account needs to be linked before access can be activated.' } } },
+            },
+          }
+        },
+      },
+    },
+  }
+  vm.runInNewContext(`${match[1]}\nglobalThis.callForTest=functionCall;`, context)
+  await assert.rejects(
+    context.callForTest('admin-user-access', { action:'invite' }),
+    /This login account needs to be linked before access can be activated/,
+  )
+  assert.match(source, /fixFunctionErrorBody\(saveOrderHtml, bundle\)/)
+  assert.match(source, /function-errors-response-body-v1/)
+  assert.match(source, /error\.context/)
+})
+
 test('Vercel routing keeps employee access available during the portal-domain transition', () => {
   const config = JSON.parse(readFileSync(new URL('../vercel.json', import.meta.url), 'utf8'))
   assert.equal(config.rewrites[0].source, '/')
@@ -299,6 +329,15 @@ test('Administrative account deletion is tenant-scoped and fails closed on histo
   assert.match(source, /checks\.some\(r=>r\.error\)/)
   assert.match(source, /deleteMembershipError/)
   assert.match(source, /another organization/)
+})
+
+test('Failed user-access actions create a structured runtime and audit record', () => {
+  const source = readFileSync(new URL('../supabase/functions/admin-user-access/index.ts', import.meta.url), 'utf8')
+  assert.match(source, /admin_user_access_failed/)
+  assert.match(source, /request_id:requestId/)
+  assert.match(source, /FAILED_\$\{action/)
+  assert.match(source, /User access action failed in the HRMS admin portal/)
+  assert.match(source, /\{error:message,request_id:requestId\}/)
 })
 
 test('Disciplinary email delivery is organization-scoped, bounded, and idempotent', () => {

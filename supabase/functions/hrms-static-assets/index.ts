@@ -54,6 +54,26 @@ async function gzipBase64(text: string) {
 const EMPLOYEE_PORTAL_URL = 'https://portal.adscope.net/'
 
 const EMPLOYEE_SAVE_ORDER_MARKER = '<!-- data-adscope-employee-save-order="valid-state-v1" -->'
+const FUNCTION_ERROR_BODY_MARKER = '<!-- data-adscope-function-errors="response-body-v1" -->'
+const FUNCTION_CALL_ORIGINAL = String.raw`  async function functionCall(name, body = {}) {
+    const { data, error } = await client.functions.invoke(name, { body });
+    if (error) throw new Error(data?.error || error.message || 'Secure function failed.');
+    if (data?.error) throw new Error(data.error);
+    return data;
+  }`
+const FUNCTION_CALL_PATCH = String.raw`  async function functionCall(name, body = {}) {
+    const { data, error } = await client.functions.invoke(name, { body });
+    let responseBody = data;
+    if (error && (!responseBody || !responseBody.error)) {
+      const context = error.context;
+      if (context && typeof context.json === 'function') {
+        try { responseBody = await context.json(); } catch {}
+      }
+    }
+    if (error) throw new Error(responseBody?.error || responseBody?.message || error.message || 'Secure function failed.');
+    if (responseBody?.error) throw new Error(responseBody.error);
+    return responseBody;
+  }`
 const EMPLOYEE_SAVE_ORDER_BLOCK = String.raw`      let employeeId;
       try {
         const selectedShift = fd.get('current_shift_id') || null;
@@ -322,6 +342,19 @@ function fixEmployeeSaveOrder(html: string, bundle: string) {
   return patched
 }
 
+function fixFunctionErrorBody(html: string, bundle: string) {
+  if (bundle !== 'admin' || html.includes(FUNCTION_ERROR_BODY_MARKER)) return html
+  if (!html.includes(FUNCTION_CALL_ORIGINAL)) {
+    console.warn('Edge Function error-body patch skipped because the Admin bundle shape changed')
+    return html
+  }
+
+  let patched = html.replace(FUNCTION_CALL_ORIGINAL, FUNCTION_CALL_PATCH)
+  if (/<\/body>/i.test(patched)) patched = patched.replace(/<\/body>/i, `${FUNCTION_ERROR_BODY_MARKER}</body>`)
+  else patched += FUNCTION_ERROR_BODY_MARKER
+  return patched
+}
+
 function updateEmployeePortalUrls(html: string) {
   return html
     .replaceAll('https://attendance.adscope.net/', EMPLOYEE_PORTAL_URL)
@@ -359,7 +392,8 @@ Deno.serve(async (req) => {
 
     const originalHtml = await gunzipBase64(String(data.payload))
     const saveOrderHtml = fixEmployeeSaveOrder(originalHtml, bundle)
-    const patchedHtml = injectUxPatch(injectInitializationRecovery(updateEmployeePortalUrls(saveOrderHtml)))
+    const functionErrorHtml = fixFunctionErrorBody(saveOrderHtml, bundle)
+    const patchedHtml = injectUxPatch(injectInitializationRecovery(updateEmployeePortalUrls(functionErrorHtml)))
     if (!patchedHtml.includes('data-adscope-init-recovery="auth-deadlock-v1"')) throw new Error('Initialization recovery patch was not applied')
     if (!patchedHtml.includes('data-adscope-ux-patch="english-errors-v2"')) throw new Error('English UX patch was not applied')
     if (patchedHtml.includes('https://attendance.adscope.net')) throw new Error('Legacy employee portal URL is still present')
@@ -373,9 +407,12 @@ Deno.serve(async (req) => {
         'Pragma': 'no-cache',
         'X-Content-Type-Options': 'nosniff',
         'Content-Length': String(new TextEncoder().encode(payload).byteLength),
-        'X-HRMS-Patch': patchedHtml.includes(EMPLOYEE_SAVE_ORDER_MARKER)
-          ? 'auth-deadlock-v1,english-errors-v2,employee-save-order-v1'
-          : 'auth-deadlock-v1,english-errors-v2',
+        'X-HRMS-Patch': [
+          'auth-deadlock-v1',
+          'english-errors-v2',
+          patchedHtml.includes(EMPLOYEE_SAVE_ORDER_MARKER) ? 'employee-save-order-v1' : null,
+          patchedHtml.includes(FUNCTION_ERROR_BODY_MARKER) ? 'function-errors-response-body-v1' : null,
+        ].filter(Boolean).join(','),
       },
     })
   } catch (error) {

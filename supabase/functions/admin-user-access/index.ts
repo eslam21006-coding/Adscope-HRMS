@@ -37,8 +37,8 @@ async function actorContext(admin:ReturnType<typeof createClient>,jwt:string){
   if(!m||m.role!=='owner')throw new Error('Only an Owner can manage employee accounts and access.')
   return {user:data.user,membership:m as Membership}
 }
-async function audit(admin:ReturnType<typeof createClient>,actor:Membership,userId:string,action:string,entityId:string,values:Record<string,unknown>,req:Request){
-  const {error}=await admin.from('audit_logs').insert({organization_id:actor.organization_id,actor_user_id:userId,actor_role:actor.role,action,entity_type:'user_access',entity_id:entityId,new_values:values,reason:'User access managed through the HRMS admin portal',user_agent:(req.headers.get('user-agent')??'').slice(0,500)||null}); if(error)console.error(error.message)
+async function audit(admin:ReturnType<typeof createClient>,actor:Membership,userId:string,action:string,entityId:string,values:Record<string,unknown>,req:Request,reason='User access managed through the HRMS admin portal'){
+  const {error}=await admin.from('audit_logs').insert({organization_id:actor.organization_id,actor_user_id:userId,actor_role:actor.role,action,entity_type:'user_access',entity_id:entityId,new_values:values,reason,user_agent:(req.headers.get('user-agent')??'').slice(0,500)||null}); if(error)console.error(error.message)
 }
 async function findByEmail(admin:ReturnType<typeof createClient>,email:string){ return (await allUsers(admin)).find(u=>emailOf(u.email)===email) }
 async function loadEmployee(admin:ReturnType<typeof createClient>,actor:Membership,id:string){ const {data,error}=await admin.from('employees').select('id,organization_id,user_id,employee_code,full_name,email,position_title,status,employment_type,attendance_required,portal_enabled').eq('id',id).eq('organization_id',actor.organization_id).single(); if(error||!data)throw new Error('Employee record not found.'); return data as Employee }
@@ -55,12 +55,19 @@ Deno.serve(async(req:Request)=>{
   if(req.method==='OPTIONS')return new Response('ok',{headers:headers(req)})
   if(req.method!=='POST')return reply(req,{error:'Method not allowed.'},405)
   const origin=req.headers.get('Origin')??''; if(!originAllowed(origin))return reply(req,{error:'Origin not allowed.'},403)
+  const requestId=crypto.randomUUID()
+  let admin:ReturnType<typeof createClient>|null=null
+  let actor:Membership|null=null
+  let actorUserId:string|null=null
+  let action='unknown'
+  let targetId=requestId
   try{
     const auth=req.headers.get('Authorization'); if(!auth?.startsWith('Bearer '))throw new Error('Authenticated session required.')
     const url=Deno.env.get('SUPABASE_URL')??''; const key=secretKey(); if(!url||!key)throw new Error('The secure user-management service is not configured.')
-    const admin=createClient(url,key,{auth:{persistSession:false,autoRefreshToken:false,detectSessionInUrl:false}})
-    const {user:actorUser,membership:actor}=await actorContext(admin,auth.slice(7))
-    const body=await req.json().catch(()=>({})) as Record<string,unknown>; const action=String(body.action??'list')
+    admin=createClient(url,key,{auth:{persistSession:false,autoRefreshToken:false,detectSessionInUrl:false}})
+    const context=await actorContext(admin,auth.slice(7)); const actorUser=context.user; actor=context.membership; actorUserId=actorUser.id
+    const body=await req.json().catch(()=>({})) as Record<string,unknown>; action=String(body.action??'list')
+    targetId=String(body.employee_id??body.user_id??requestId).slice(0,120)
 
     if(action==='list'){
       const [{data:employees,error:ee},{data:memberships,error:me},users]=await Promise.all([
@@ -125,5 +132,12 @@ Deno.serve(async(req:Request)=>{
       await audit(admin,actor,actorUser.id,'DELETE_TEST_USER',userId,{employee_id:e?.id??null},req); return reply(req,{ok:true,message:'Test login deleted. Employee history was not removed.'})
     }
     throw new Error('Unsupported user-access action.')
-  }catch(error){ console.error(error); const message=publicError(error); return reply(req,{error:message},/session|authenticated/i.test(message)?401:/Only an Owner|cannot|must keep|Owner accounts/i.test(message)?403:400) }
+  }catch(error){
+    const message=publicError(error)
+    const raw=error instanceof Error?error.message:String(error??'')
+    const failedAction=`FAILED_${action.replace(/[^a-z0-9_]/gi,'_').toUpperCase().slice(0,60)||'UNKNOWN'}`
+    console.error(JSON.stringify({event:'admin_user_access_failed',request_id:requestId,action,organization_id:actor?.organization_id??null,actor_user_id:actorUserId,target_id:targetId,error:raw.slice(0,500)}))
+    if(admin&&actor&&actorUserId)await audit(admin,actor,actorUserId,failedAction,targetId,{request_id:requestId,action,public_error:message},req,'User access action failed in the HRMS admin portal')
+    return reply(req,{error:message,request_id:requestId},/session|authenticated/i.test(message)?401:/Only an Owner|cannot|must keep|Owner accounts/i.test(message)?403:400)
+  }
 })
