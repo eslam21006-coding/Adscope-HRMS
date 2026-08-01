@@ -35,15 +35,15 @@ Open the Vercel URL and sign in through `/admin/`.
 
 Then add custom domains in Vercel:
 - `hrms.adscope.net`
-- `attendance.adscope.net`
+- `portal.adscope.net`
 
-Both domains may point to the same project. The root page routes `hrms.*` to `/admin/` and `attendance.*` to `/attendance/`.
+Both domains may point to the same project. The root page routes `hrms.*` to `/admin/` and `portal.*` to `/attendance/`. The legacy `attendance.adscope.net` hostname redirects to `portal.adscope.net`.
 
 ## Supabase Auth URL settings
 After the custom domains resolve, add these in Supabase Authentication > URL Configuration:
 - Site URL: `https://hrms.adscope.net`
 - Redirect URL: `https://hrms.adscope.net/**`
-- Redirect URL: `https://attendance.adscope.net/**`
+- Redirect URL: `https://portal.adscope.net/**`
 
 ## Security
 The package contains only the Supabase publishable key, which is intended for browser use with RLS. It does not contain a service-role key, secret key, database password, or user password.

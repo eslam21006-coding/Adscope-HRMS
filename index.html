@@ -13,15 +13,16 @@
   <main class="card">
     <div class="mark">A</div>
     <h1>Adscope HRMS</h1>
-    <p>Secure cloud access for administration and employee attendance.</p>
+    <p>Secure cloud access for administration and employee self-service.</p>
     <div class="actions">
       <a class="primary" href="/admin/">Open Admin Portal</a>
-      <a class="secondary" href="/attendance/">Open Attendance Portal</a>
+      <a class="secondary" href="https://portal.adscope.net/">Open Employee Portal</a>
     </div>
   </main>
   <script>
     const host = location.hostname.toLowerCase();
-    if (host.startsWith('attendance.')) location.replace('/attendance/');
+    if (host === 'attendance.adscope.net') location.replace('https://portal.adscope.net/');
+    if (host === 'portal.adscope.net') location.replace('/attendance/');
     if (host.startsWith('hrms.')) location.replace('/admin/');
   </script>
 </body>

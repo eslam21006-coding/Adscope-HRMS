@@ -260,7 +260,7 @@
     app.querySelectorAll('[data-page]').forEach(btn => btn.onclick = () => { state.page = btn.dataset.page; state.menuOpen=false; render(); });
     document.getElementById('activeMonth').onchange = e => { state.month = e.target.value; loadPage(); };
     document.getElementById('logout').onclick = () => client.auth.signOut();
-    document.getElementById('attendancePortal').onclick = () => window.open('/attendance/', '_blank', 'noopener');
+    document.getElementById('attendancePortal').onclick = () => window.open(cfg.employeePortalUrl, '_blank', 'noopener');
     document.getElementById('menu').onclick = () => document.getElementById('sidebar').classList.toggle('open');
   }
 
@@ -472,14 +472,16 @@
     try{await loadContext();await render();}catch(error){await client.auth.signOut();loginView(error.message);}
   }
 
-  client.auth.onAuthStateChange(async(event,session)=>{
-    state.session=session;
-    if(event==='SIGNED_OUT'||!session)return loginView();
-    if(event==='PASSWORD_RECOVERY'){
-      showModal('Set a new password',`<form><label class="field"><span>New password</span><input name="password" type="password" minlength="8" required></label><button class="primary" type="submit">Update password</button></form>`,async e=>{e.preventDefault();const{error}=await client.auth.updateUser({password:new FormData(e.currentTarget).get('password')});if(error)return toast(humanizeError(error),'error');closeModal();toast('Password updated.','success');});
-      return;
-    }
-    try{await loadContext();await render();}catch(error){loginView(error.message);}
+  client.auth.onAuthStateChange((event,session)=>{
+    window.setTimeout(async()=>{
+      state.session=session;
+      if(event==='SIGNED_OUT'||!session)return loginView();
+      if(event==='PASSWORD_RECOVERY'){
+        showModal('Set a new password',`<form><label class="field"><span>New password</span><input name="password" type="password" minlength="8" required></label><button class="primary" type="submit">Update password</button></form>`,async e=>{e.preventDefault();const{error}=await client.auth.updateUser({password:new FormData(e.currentTarget).get('password')});if(error)return toast(humanizeError(error),'error');closeModal();toast('Password updated.','success');});
+        return;
+      }
+      try{await loadContext();await render();}catch(error){loginView(humanizeError(error));}
+    },0);
   });
 
   boot();
