@@ -12,6 +12,7 @@ const adminSourcePath = new URL('../admin/app.js', import.meta.url)
 const employeeSourcePath = new URL('../attendance/portal.js', import.meta.url)
 const adminFixturePath = new URL('./fixtures/admin-bundle.html', import.meta.url)
 const employeeFixturePath = new URL('./fixtures/attendance-bundle.html', import.meta.url)
+const employeeSaveFixturePath = new URL('./fixtures/admin-employee-save-flow.js', import.meta.url)
 
 function inlineScript(html) {
   const match = html.match(/<script>([\s\S]*?)<\/script>/i)
@@ -200,6 +201,47 @@ test('Checked-in bundle shapes accept recovery injection and portal URL replacem
       .replaceAll('https://attendance.adscope.net', 'https://portal.adscope.net')
     assert.doesNotMatch(migrated, /https:\/\/attendance\.adscope\.net/)
   }
+})
+
+test('Employee save patch preserves a valid database state until compensation and shift are saved', () => {
+  const source = readFileSync(staticFunctionPath, 'utf8')
+  const match = source.match(/const EMPLOYEE_SAVE_ORDER_BLOCK = String\.raw`([\s\S]*?)`\n\nconst INITIALIZATION_RECOVERY_PATCH/)
+  assert.ok(match, 'Employee save ordering block must be present')
+
+  const original = readFileSync(employeeSaveFixturePath, 'utf8')
+  const start = '      let employeeId;\n      try {\n'
+  const end = "        if (isNew && fd.get('send_invite') === 'true') {"
+  const startIndex = original.indexOf(start)
+  const endIndex = original.indexOf(end, startIndex)
+  assert.ok(startIndex >= 0 && endIndex > startIndex, 'Production save-flow anchors must still match')
+
+  const patched = `${original.slice(0, startIndex)}${match[1]}${original.slice(endIndex)}`
+  const compensationIndex = patched.indexOf("client.rpc('set_employee_compensation'")
+  const activationIndex = patched.indexOf("update({ status:common.status })")
+  const profileIndex = patched.indexOf("delete profile.status")
+
+  assert.match(patched, /status:'pending_setup'/)
+  assert.ok(profileIndex >= 0, 'Existing employee profile updates must exclude status')
+  assert.ok(compensationIndex > profileIndex, 'Compensation must follow the safe profile update')
+  assert.ok(activationIndex > compensationIndex, 'Active status must be applied only after compensation')
+  assert.doesNotMatch(patched.slice(0, compensationIndex), /update\(common\)/)
+  assert.match(source, /fixEmployeeSaveOrder\(originalHtml, bundle\)/)
+  assert.match(source, /employee-save-order-v1/)
+
+  const employeeRule = employee => employee.status !== 'active' || (
+    Boolean(employee.payroll_currency) &&
+    (employee.compensation_type === 'commission_only' || employee.basic_salary > 0) &&
+    (!employee.attendance_required || Boolean(employee.current_shift_id))
+  )
+  const hassanBefore = { status:'pending_setup', payroll_currency:'EGP', compensation_type:'fixed_salary', basic_salary:0, attendance_required:true, current_shift_id:'flexible-shift' }
+  assert.equal(employeeRule(hassanBefore), true)
+  assert.equal(employeeRule({ ...hassanBefore, status:'active' }), false, 'Old ordering must reproduce Hassan’s rejected save')
+  assert.equal(employeeRule({ ...hassanBefore, basic_salary:25000, status:'active' }), true, 'Compensation-first ordering must permit the completed form')
+
+  const activeNewEmployeeBeforeShift = { ...hassanBefore, basic_salary:25000, current_shift_id:null, status:'active' }
+  assert.equal(employeeRule(activeNewEmployeeBeforeShift), false)
+  assert.equal(employeeRule({ ...activeNewEmployeeBeforeShift, status:'pending_setup' }), true, 'New employees must remain pending until their shift is assigned')
+  assert.equal(employeeRule({ ...activeNewEmployeeBeforeShift, current_shift_id:'assigned-shift' }), true)
 })
 
 test('Vercel routing keeps employee access available during the portal-domain transition', () => {
