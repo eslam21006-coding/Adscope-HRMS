@@ -209,6 +209,7 @@ const UX_PATCH = String.raw`<script data-adscope-ux-patch="english-errors-v2">
       [/null value in column/i,'A required field is missing. Review the form and try again.'],
       [/violates check constraint/i,'The entered information does not meet one or more employee rules. Review the salary, compensation type, attendance requirement and assigned shift.'],
       [/invalid input syntax/i,'One of the entered values has an invalid format. Review the form and try again.'],
+      [/(type|relation|function|schema|column|operator) .* does not exist|42P01|42703|42704|42883|3F000/i,'The HR service could not process this request. The change was not saved. Try again.'],
       [/permission denied|row-level security|new row violates row-level security/i,'You do not have permission to perform this action.'],
       [/jwt.*expired|token.*expired|session.*expired/i,'Your session has expired. Sign in again, then repeat the action.'],
       [/one-time token not found|email link is invalid or has expired|email link has expired/i,'This invitation or password-reset link has expired. Request a new link.'],

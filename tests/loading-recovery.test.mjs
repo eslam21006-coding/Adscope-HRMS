@@ -13,6 +13,7 @@ const employeeSourcePath = new URL('../attendance/portal.js', import.meta.url)
 const adminFixturePath = new URL('./fixtures/admin-bundle.html', import.meta.url)
 const employeeFixturePath = new URL('./fixtures/attendance-bundle.html', import.meta.url)
 const employeeSaveFixturePath = new URL('./fixtures/admin-employee-save-flow.js', import.meta.url)
+const citextMigrationPath = new URL('../supabase/migrations/20260801161114_fix_request_code_citext_search_path.sql', import.meta.url)
 
 function inlineScript(html) {
   const match = html.match(/<script>([\s\S]*?)<\/script>/i)
@@ -313,6 +314,33 @@ test('Static bundle failures return a safe public message', () => {
   const source = readFileSync(staticFunctionPath, 'utf8')
   assert.match(source, /\{ error: 'Unable to load the HRMS portal' \}/)
   assert.doesNotMatch(source, /\{ error: error instanceof Error/)
+})
+
+test('Undefined database objects are translated instead of exposed to Owners', () => {
+  const source = readFileSync(staticFunctionPath, 'utf8')
+  assert.ok(source.includes('(type|relation|function|schema|column|operator) .* does not exist'))
+  for (const sqlState of ['42P01', '42703', '42704', '42883', '3F000']) {
+    assert.match(source, new RegExp(sqlState))
+  }
+  assert.match(source, /The HR service could not process this request\. The change was not saved\. Try again\./)
+})
+
+test('Request-code functions resolve citext from the locked extensions schema', () => {
+  const migration = readFileSync(citextMigrationPath, 'utf8')
+  const functions = [
+    'flag_unauthorized_breaks',
+    'flag_unexcused_absences',
+    'submit_advance_request',
+    'submit_leave_request',
+    'submit_permission_request',
+  ]
+
+  for (const functionName of functions) {
+    assert.match(migration, new RegExp(`alter function public\\.${functionName}\\(`))
+  }
+
+  assert.equal((migration.match(/set search_path = public, app_private, extensions;/g) ?? []).length, functions.length)
+  assert.doesNotMatch(migration, /create extension|drop extension|security definer|grant\s+create/i)
 })
 
 test('Owner-only Edge Functions use explicit origin allowlists', () => {
