@@ -5,8 +5,7 @@
       "source": "/",
       "has": [
         {
-          "type": "header",
-          "key": "host",
+          "type": "host",
           "value": "attendance\\.adscope\\.net"
         }
       ],
@@ -16,8 +15,7 @@
       "source": "/",
       "has": [
         {
-          "type": "header",
-          "key": "host",
+          "type": "host",
           "value": "portal\\.adscope\\.net"
         }
       ],

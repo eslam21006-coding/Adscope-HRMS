@@ -26,7 +26,7 @@ This is the Supabase-connected frontend for the existing Adscope HRMS database.
 
 ## Test accounts
 - Owner: `eslam@adscope.net`
-- HR Admin: `nrewan331@gmail.com`
+- Owner: `nrewan331@gmail.com`
 
 Passwords remain private and are never included in this package.
 
@@ -37,7 +37,7 @@ Then add custom domains in Vercel:
 - `hrms.adscope.net`
 - `portal.adscope.net`
 
-Both domains may point to the same project. The root page routes `hrms.*` to `/admin/` and `portal.*` to `/attendance/`. The legacy `attendance.adscope.net` hostname redirects to `portal.adscope.net`.
+Both domains may point to the same project. The root page routes `hrms.*` to `/admin/` and `portal.*` to `/attendance/`. If the legacy `attendance.adscope.net` hostname still points to this Vercel project, it stays on the local `/attendance/` application while preserving the query string and URL fragment.
 
 ## Supabase Auth URL settings
 After the custom domains resolve, add these in Supabase Authentication > URL Configuration:
