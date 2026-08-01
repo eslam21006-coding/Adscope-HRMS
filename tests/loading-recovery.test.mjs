@@ -217,11 +217,13 @@ test('Employee save patch preserves a valid database state until compensation an
 
   const patched = `${original.slice(0, startIndex)}${match[1]}${original.slice(endIndex)}`
   const compensationIndex = patched.indexOf("client.rpc('set_employee_compensation'")
-  const activationIndex = patched.indexOf("update({ status:common.status })")
+  const activationIndex = patched.indexOf("update({ status:common.status })", compensationIndex)
+  const demotionIndex = patched.indexOf('error:demotionError')
   const profileIndex = patched.indexOf("delete profile.status")
 
   assert.match(patched, /status:'pending_setup'/)
   assert.ok(profileIndex >= 0, 'Existing employee profile updates must exclude status')
+  assert.ok(demotionIndex > profileIndex && demotionIndex < compensationIndex, 'Active employees must be demoted before compensation changes')
   assert.ok(compensationIndex > profileIndex, 'Compensation must follow the safe profile update')
   assert.ok(activationIndex > compensationIndex, 'Active status must be applied only after compensation')
   assert.doesNotMatch(patched.slice(0, compensationIndex), /update\(common\)/)

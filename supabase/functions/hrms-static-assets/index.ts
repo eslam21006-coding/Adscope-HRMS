@@ -76,6 +76,10 @@ const EMPLOYEE_SAVE_ORDER_BLOCK = String.raw`      let employeeId;
           const { error } = await client.from('employees').update(profile).eq('id',employee.id).eq('organization_id',orgId());
           if (error) throw error;
           employeeId = employee.id;
+          if (common.status !== 'active' && employee?.status === 'active') {
+            const { error:demotionError } = await client.from('employees').update({ status:common.status }).eq('id',employeeId).eq('organization_id',orgId());
+            if (demotionError) throw demotionError;
+          }
         }
 
         if (selectedShift && (isNew || selectedShift !== employee?.current_shift_id)) {
