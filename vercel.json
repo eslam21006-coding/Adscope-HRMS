@@ -1,8 +1,8 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
-  "redirects": [
+  "rewrites": [
     {
-      "source": "/:path*",
+      "source": "/",
       "has": [
         {
           "type": "header",
@@ -10,11 +10,8 @@
           "value": "attendance\\.adscope\\.net"
         }
       ],
-      "destination": "https://portal.adscope.net/:path*",
-      "permanent": true
-    }
-  ],
-  "rewrites": [
+      "destination": "/attendance/"
+    },
     {
       "source": "/",
       "has": [
