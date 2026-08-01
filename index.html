@@ -21,7 +21,7 @@
   </main>
   <script>
     const host = location.hostname.toLowerCase();
-    if (host === 'attendance.adscope.net') location.replace('https://portal.adscope.net' + location.pathname + location.search + location.hash);
+    if (host === 'attendance.adscope.net') location.replace('/attendance/' + location.search + location.hash);
     if (host === 'portal.adscope.net') location.replace('/attendance/');
     if (host.startsWith('hrms.')) location.replace('/admin/');
   </script>
