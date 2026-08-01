@@ -334,9 +334,12 @@ test('Administrative account deletion is tenant-scoped and fails closed on histo
 test('Failed user-access actions create a structured runtime and audit record', () => {
   const source = readFileSync(new URL('../supabase/functions/admin-user-access/index.ts', import.meta.url), 'utf8')
   assert.match(source, /admin_user_access_failed/)
+  assert.match(source, /admin_user_access_audit_failed/)
   assert.match(source, /request_id:requestId/)
   assert.match(source, /FAILED_\$\{action/)
   assert.match(source, /User access action failed in the HRMS admin portal/)
+  assert.match(source, /catch\(auditError\)/)
+  assert.ok(source.indexOf("return reply(req,{error:message,request_id:requestId}") > source.indexOf('catch(auditError)'), 'The sanitized response must remain after the isolated audit failure handler')
   assert.match(source, /\{error:message,request_id:requestId\}/)
 })
 

@@ -137,7 +137,13 @@ Deno.serve(async(req:Request)=>{
     const raw=error instanceof Error?error.message:String(error??'')
     const failedAction=`FAILED_${action.replace(/[^a-z0-9_]/gi,'_').toUpperCase().slice(0,60)||'UNKNOWN'}`
     console.error(JSON.stringify({event:'admin_user_access_failed',request_id:requestId,action,organization_id:actor?.organization_id??null,actor_user_id:actorUserId,target_id:targetId,error:raw.slice(0,500)}))
-    if(admin&&actor&&actorUserId)await audit(admin,actor,actorUserId,failedAction,targetId,{request_id:requestId,action,public_error:message},req,'User access action failed in the HRMS admin portal')
+    if(admin&&actor&&actorUserId){
+      try{
+        await audit(admin,actor,actorUserId,failedAction,targetId,{request_id:requestId,action,public_error:message},req,'User access action failed in the HRMS admin portal')
+      }catch(auditError){
+        console.error(JSON.stringify({event:'admin_user_access_audit_failed',request_id:requestId,error:auditError instanceof Error?auditError.message.slice(0,500):'Unknown audit failure'}))
+      }
+    }
     return reply(req,{error:message,request_id:requestId},/session|authenticated/i.test(message)?401:/Only an Owner|cannot|must keep|Owner accounts/i.test(message)?403:400)
   }
 })
