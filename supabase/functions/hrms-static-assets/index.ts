@@ -55,6 +55,7 @@ const EMPLOYEE_PORTAL_URL = 'https://portal.adscope.net/'
 
 const EMPLOYEE_SAVE_ORDER_MARKER = '<!-- data-adscope-employee-save-order="valid-state-v1" -->'
 const FUNCTION_ERROR_BODY_MARKER = '<!-- data-adscope-function-errors="response-body-v1" -->'
+const USER_ACCESS_PATCH_MARKER = '<!-- data-adscope-user-access="email-management-v1" -->'
 const FUNCTION_CALL_ORIGINAL = String.raw`  async function functionCall(name, body = {}) {
     const { data, error } = await client.functions.invoke(name, { body });
     if (error) throw new Error(data?.error || error.message || 'Secure function failed.');
@@ -115,6 +116,33 @@ const EMPLOYEE_SAVE_ORDER_BLOCK = String.raw`      let employeeId;
         const { error:statusError } = await client.from('employees').update({ status:common.status }).eq('id',employeeId).eq('organization_id',orgId());
         if (statusError) throw statusError;
 `
+
+const SETTINGS_TAB_ORIGINAL = String.raw`    content.querySelectorAll('[data-settings-tab]').forEach(button=>button.onclick=()=>{content.querySelectorAll('[data-settings-tab]').forEach(item=>item.classList.remove('active'));button.classList.add('active');loadSettingsTab(button.dataset.settingsTab);});
+    await loadSettingsTab('company');`
+const SETTINGS_TAB_PATCH = String.raw`    const selectedSettingsTab=state.settingsTab||'company';
+    content.querySelectorAll('[data-settings-tab]').forEach(button=>button.onclick=()=>{state.settingsTab=button.dataset.settingsTab;content.querySelectorAll('[data-settings-tab]').forEach(item=>item.classList.remove('active'));button.classList.add('active');loadSettingsTab(button.dataset.settingsTab);});
+    const selectedSettingsButton=content.querySelector('[data-settings-tab="'+selectedSettingsTab+'"]')||content.querySelector('[data-settings-tab="company"]');
+    content.querySelectorAll('[data-settings-tab]').forEach(item=>item.classList.remove('active'));selectedSettingsButton.classList.add('active');
+    await loadSettingsTab(selectedSettingsButton.dataset.settingsTab);`
+const USER_EMAIL_CELL_ORIGINAL = "<td>${esc(row.email||'—')}</td>"
+const USER_EMAIL_CELL_PATCH = "<td>${esc(row.employee_email||row.email||'—')}${row.email_mismatch?`<br><span class=\"danger\">Invitation/login: ${esc(row.login_email||'—')}</span>`:''}</td>"
+const USER_INVITE_ACTION_ORIGINAL = "${row.employee_id&&row.access_status==='not_invited'?`<button data-user-invite=\"${row.employee_id}\">Invite</button>`:''}"
+const USER_INVITE_ACTION_PATCH = "${row.employee_id&&row.access_status==='not_invited'?`<button data-user-invite=\"${row.employee_id}\">Invite</button>`:''}${row.employee_id&&row.user_id?`<button data-user-email=\"${row.employee_id}\">${row.access_status==='invitation_pending'?'Change invited email':'Change email'}</button>`:''}"
+const USER_RESET_ACTION_ORIGINAL = "${row.user_id?`<button data-user-reset=\"${row.user_id}\">Send password email</button>`:''}"
+const USER_RESET_ACTION_PATCH = "${row.user_id&&!row.email_mismatch?`<button data-user-reset=\"${row.user_id}\">${row.access_status==='invitation_pending'?'Resend invitation':'Send password email'}</button>`:''}"
+const USER_INVITE_HANDLER_ORIGINAL = String.raw`    target.querySelectorAll('[data-user-invite]').forEach(button=>{button.onclick=()=>{const row=rows.find(item=>item.employee_id===button.dataset.userInvite);inviteEmployee({id:row.employee_id,full_name:row.full_name,email:row.email});};});`
+const USER_INVITE_HANDLER_PATCH = String.raw`    target.querySelectorAll('[data-user-invite]').forEach(button=>{button.onclick=()=>{const row=rows.find(item=>item.employee_id===button.dataset.userInvite);inviteEmployee({id:row.employee_id,full_name:row.full_name,email:row.employee_email||row.email});};});
+    target.querySelectorAll('[data-user-email]').forEach(button=>{button.onclick=()=>{const row=rows.find(item=>item.employee_id===button.dataset.userEmail);changeEmailForm(row);};});`
+const ACCESS_FORM_ANCHOR = String.raw`  function accessForm(userId,currentRole,active){`
+const CHANGE_EMAIL_FORM = [
+  "  function changeEmailForm(row){",
+  "    const pending=row.access_status==='invitation_pending';",
+  "    const currentEmail=row.login_email||row.email||'';",
+  "    const employeeEmail=row.employee_email||row.email||'';",
+  "    showModal(pending?'Change invited email':'Change login email',`<form><label class=\"field\"><span>New email</span><input name=\"email\" type=\"email\" value=\"${esc(employeeEmail)}\" required></label><div class=\"notice\"><strong>Current ${pending?'invitation':'login'}</strong><p>${esc(currentEmail||'No email')}</p></div><div class=\"notice\"><strong>${pending?'A new invitation will be sent':'Sign-in email will change immediately'}</strong><p>${pending?'The old pending invitation will stop working.':'The employee must use the new email the next time they sign in.'}</p></div><div class=\"button-row\"><button class=\"primary\" type=\"submit\">${pending?'Change email and send':'Change email'}</button><button class=\"ghost\" type=\"button\" data-cancel>Cancel</button></div></form>`,async event=>{event.preventDefault();const fd=new FormData(event.currentTarget);const button=event.currentTarget.querySelector('[type=\"submit\"]');button.disabled=true;button.textContent=pending?'Sending…':'Saving…';try{const response=await functionCall('admin-user-access',{action:'change_email',employee_id:row.employee_id,email:fd.get('email')});closeModal();toast(response.message,'success');state.settingsTab='users';await loadSettingsTab('users');}catch(error){button.disabled=false;button.textContent=pending?'Change email and send':'Change email';toast(humanizeError(error),'error');}});",
+  "  }",
+  "",
+].join('\n')
 
 const INITIALIZATION_RECOVERY_PATCH = String.raw`<script data-adscope-init-recovery="auth-deadlock-v1">
 (function(){
@@ -356,6 +384,28 @@ function fixFunctionErrorBody(html: string, bundle: string) {
   return patched
 }
 
+function fixUserAccessManagement(html: string, bundle: string) {
+  if (bundle !== 'admin' || html.includes(USER_ACCESS_PATCH_MARKER)) return html
+  const replacements = [
+    [SETTINGS_TAB_ORIGINAL, SETTINGS_TAB_PATCH],
+    ['Create invitations, change roles, reset passwords and suspend accounts.', 'Create invitations, correct login emails, change roles, reset passwords and suspend accounts.'],
+    [USER_EMAIL_CELL_ORIGINAL, USER_EMAIL_CELL_PATCH],
+    [USER_INVITE_ACTION_ORIGINAL, USER_INVITE_ACTION_PATCH],
+    [USER_RESET_ACTION_ORIGINAL, USER_RESET_ACTION_PATCH],
+    [USER_INVITE_HANDLER_ORIGINAL, USER_INVITE_HANDLER_PATCH],
+    [ACCESS_FORM_ANCHOR, `${CHANGE_EMAIL_FORM}${ACCESS_FORM_ANCHOR}`],
+  ] as const
+  if (replacements.some(([original]) => !html.includes(original))) {
+    console.warn('User access email-management patch skipped because the Admin bundle shape changed')
+    return html
+  }
+  let patched = html
+  for (const [original, replacement] of replacements) patched = patched.replace(original, replacement)
+  if (/<\/body>/i.test(patched)) patched = patched.replace(/<\/body>/i, `${USER_ACCESS_PATCH_MARKER}</body>`)
+  else patched += USER_ACCESS_PATCH_MARKER
+  return patched
+}
+
 function updateEmployeePortalUrls(html: string) {
   return html
     .replaceAll('https://attendance.adscope.net/', EMPLOYEE_PORTAL_URL)
@@ -394,7 +444,8 @@ Deno.serve(async (req) => {
     const originalHtml = await gunzipBase64(String(data.payload))
     const saveOrderHtml = fixEmployeeSaveOrder(originalHtml, bundle)
     const functionErrorHtml = fixFunctionErrorBody(saveOrderHtml, bundle)
-    const patchedHtml = injectUxPatch(injectInitializationRecovery(updateEmployeePortalUrls(functionErrorHtml)))
+    const userAccessHtml = fixUserAccessManagement(functionErrorHtml, bundle)
+    const patchedHtml = injectUxPatch(injectInitializationRecovery(updateEmployeePortalUrls(userAccessHtml)))
     if (!patchedHtml.includes('data-adscope-init-recovery="auth-deadlock-v1"')) throw new Error('Initialization recovery patch was not applied')
     if (!patchedHtml.includes('data-adscope-ux-patch="english-errors-v2"')) throw new Error('English UX patch was not applied')
     if (patchedHtml.includes('https://attendance.adscope.net')) throw new Error('Legacy employee portal URL is still present')
@@ -413,6 +464,7 @@ Deno.serve(async (req) => {
           'english-errors-v2',
           patchedHtml.includes(EMPLOYEE_SAVE_ORDER_MARKER) ? 'employee-save-order-v1' : null,
           patchedHtml.includes(FUNCTION_ERROR_BODY_MARKER) ? 'function-errors-response-body-v1' : null,
+          patchedHtml.includes(USER_ACCESS_PATCH_MARKER) ? 'user-access-email-management-v1' : null,
         ].filter(Boolean).join(','),
       },
     })

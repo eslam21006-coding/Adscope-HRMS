@@ -206,7 +206,7 @@ test('Checked-in bundle shapes accept recovery injection and portal URL replacem
 
 test('Employee save patch preserves a valid database state until compensation and shift are saved', () => {
   const source = readFileSync(staticFunctionPath, 'utf8')
-  const match = source.match(/const EMPLOYEE_SAVE_ORDER_BLOCK = String\.raw`([\s\S]*?)`\n\nconst INITIALIZATION_RECOVERY_PATCH/)
+  const match = source.match(/const EMPLOYEE_SAVE_ORDER_BLOCK = String\.raw`([\s\S]*?)`\n\nconst SETTINGS_TAB_ORIGINAL/)
   assert.ok(match, 'Employee save ordering block must be present')
 
   const original = readFileSync(employeeSaveFixturePath, 'utf8')
@@ -361,12 +361,15 @@ test('Administrative account deletion is tenant-scoped and fails closed on histo
 
 test('Owners can replace safe legacy pending invitations without weakening account isolation', () => {
   const source = readFileSync(new URL('../supabase/functions/admin-user-access/index.ts', import.meta.url), 'utf8')
-  const conflictCheck = source.indexOf("This email is already linked to another organization.")
-  const duplicateEmployeeCheck = source.indexOf('This login is already linked to ${other.full_name}.')
-  const deletePendingUser = source.indexOf('replacedPendingInvite=true; const {error}=await admin.auth.admin.deleteUser(user.id)')
+  const prepareStart = source.indexOf('async function prepareEmailAccount')
+  const duplicateEmployeeCheck = source.indexOf('if(claimant)throw new Error', prepareStart)
+  const removeStalePendingUser = source.indexOf('await removePendingAccount(admin,actor,user)', prepareStart)
+  const removalStart = source.indexOf('async function removePendingAccount')
+  const conflictCheck = source.indexOf("This email is already linked to another organization.", removalStart)
+  const deletePendingUser = source.indexOf('admin.auth.admin.deleteUser(user.id)', removalStart)
 
   assert.ok(conflictCheck >= 0 && conflictCheck < deletePendingUser, 'Cross-organization membership must be rejected before replacing a pending invite')
-  assert.ok(duplicateEmployeeCheck >= 0 && duplicateEmployeeCheck < deletePendingUser, 'A login linked to another employee must be rejected before replacing a pending invite')
+  assert.ok(duplicateEmployeeCheck >= 0 && duplicateEmployeeCheck < removeStalePendingUser, 'A login still claimed by another employee must be rejected before replacing a pending invite')
   assert.match(source, /replaced_pending_invite:replacedPendingInvite/)
   assert.doesNotMatch(source, /An unconfirmed account already exists for this email/)
 })
@@ -377,6 +380,44 @@ test('User-access validation accepts PostgreSQL UUIDs without RFC version bits',
   assert.match(source, /\^\[0-9a-f\]\{8\}-\[0-9a-f\]\{4\}-\[0-9a-f\]\{4\}-\[0-9a-f\]\{4\}-\[0-9a-f\]\{12\}\$/)
   assert.doesNotMatch(source, /\[1-5\]\[0-9a-f\]\{3\}/)
   assert.doesNotMatch(source, /\[89ab\]\[0-9a-f\]\{3\}/)
+})
+
+test('Owners can correct pending invitation emails without keeping the wrong login linked', () => {
+  const source = readFileSync(new URL('../supabase/functions/admin-user-access/index.ts', import.meta.url), 'utf8')
+
+  assert.match(source, /action==='change_email'/)
+  assert.match(source, /CHANGE_INVITATION_EMAIL/)
+  assert.match(source, /await removePendingAccount\(admin,actor,currentUser\)/)
+  assert.match(source, /A new invitation was sent to \$\{email\}/)
+  assert.match(source, /email_mismatch:Boolean\(loginEmail/)
+  assert.match(source, /The employee email changed after this invitation\. Use Change invited email before resending\./)
+  assert.ok(source.indexOf('This email is already linked to another organization.') < source.indexOf("admin.auth.admin.deleteUser(user.id)"), 'Cross-company checks must run before a pending login is deleted')
+})
+
+test('Active login email changes keep the existing account and organization membership', () => {
+  const source = readFileSync(new URL('../supabase/functions/admin-user-access/index.ts', import.meta.url), 'utf8')
+  const changeStart = source.indexOf("if(action==='change_email')")
+  const updateStart = source.indexOf('if(currentUser.email_confirmed_at)', changeStart)
+  const pendingStart = source.indexOf('await removePendingAccount(admin,actor,currentUser)', updateStart)
+  const activeBranch = source.slice(updateStart, pendingStart)
+
+  assert.ok(changeStart >= 0 && updateStart > changeStart && pendingStart > updateStart)
+  assert.match(activeBranch, /admin\.auth\.admin\.updateUserById\(currentUser\.id,\{email\}\)/)
+  assert.match(activeBranch, /CHANGE_USER_EMAIL/)
+  assert.doesNotMatch(activeBranch, /deleteUser|organization_memberships.*delete/)
+})
+
+test('Users & access exposes email correction and preserves the selected settings tab', () => {
+  const source = readFileSync(staticFunctionPath, 'utf8')
+
+  assert.match(source, /data-adscope-user-access="email-management-v1"/)
+  assert.match(source, /state\.settingsTab=button\.dataset\.settingsTab/)
+  assert.match(source, /selectedSettingsTab=state\.settingsTab\|\|'company'/)
+  assert.match(source, /data-user-email/)
+  assert.match(source, /action:'change_email'/)
+  assert.match(source, /Resend invitation/)
+  assert.match(source, /user-access-email-management-v1/)
+  assert.match(source, /fixUserAccessManagement\(functionErrorHtml, bundle\)/)
 })
 
 test('Failed user-access actions create a structured runtime and audit record', () => {

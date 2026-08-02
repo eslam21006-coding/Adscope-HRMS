@@ -42,6 +42,31 @@ async function audit(admin:ReturnType<typeof createClient>,actor:Membership,user
 }
 async function findByEmail(admin:ReturnType<typeof createClient>,email:string){ return (await allUsers(admin)).find(u=>emailOf(u.email)===email) }
 async function loadEmployee(admin:ReturnType<typeof createClient>,actor:Membership,id:string){ const {data,error}=await admin.from('employees').select('id,organization_id,user_id,employee_code,full_name,email,position_title,status,employment_type,attendance_required,portal_enabled').eq('id',id).eq('organization_id',actor.organization_id).single(); if(error||!data)throw new Error('Employee record not found.'); return data as Employee }
+async function accountRelations(admin:ReturnType<typeof createClient>,userId:string){
+  const [{data:employees,error:employeeError},{data:memberships,error:membershipError}]=await Promise.all([
+    admin.from('employees').select('id,organization_id,user_id,employee_code,full_name,email,position_title,status,employment_type,attendance_required,portal_enabled').eq('user_id',userId),
+    admin.from('organization_memberships').select('id,organization_id,user_id,role,is_active').eq('user_id',userId)])
+  if(employeeError)throw employeeError; if(membershipError)throw membershipError
+  return {employees:(employees??[]) as Employee[],memberships:(memberships??[]) as Membership[]}
+}
+async function removePendingAccount(admin:ReturnType<typeof createClient>,actor:Membership,user:User){
+  if(user.email_confirmed_at)throw new Error('An active login cannot be replaced as a pending invitation.')
+  const relations=await accountRelations(admin,user.id)
+  if(relations.employees.some(item=>item.organization_id!==actor.organization_id)||relations.memberships.some(item=>item.organization_id!==actor.organization_id))throw new Error('This email is already linked to another organization.')
+  const {error:unlinkError}=await admin.from('employees').update({user_id:null,portal_enabled:false}).eq('organization_id',actor.organization_id).eq('user_id',user.id); if(unlinkError)throw unlinkError
+  const {error:membershipError}=await admin.from('organization_memberships').delete().eq('organization_id',actor.organization_id).eq('user_id',user.id); if(membershipError)throw membershipError
+  const {error:deleteError}=await admin.auth.admin.deleteUser(user.id); if(deleteError)throw deleteError
+}
+async function prepareEmailAccount(admin:ReturnType<typeof createClient>,actor:Membership,employee:Employee,email:string,currentUserId:string|null){
+  const user=await findByEmail(admin,email); if(!user||user.id===currentUserId)return user
+  const relations=await accountRelations(admin,user.id)
+  if(relations.employees.some(item=>item.organization_id!==actor.organization_id)||relations.memberships.some(item=>item.organization_id!==actor.organization_id))throw new Error('This email is already linked to another organization.')
+  const claimant=relations.employees.find(item=>item.organization_id===actor.organization_id&&item.id!==employee.id&&emailOf(item.email)===email)
+  if(claimant)throw new Error(`This login is already linked to ${claimant.full_name}.`)
+  if(user.email_confirmed_at)throw new Error('This email belongs to a different active login account.')
+  await removePendingAccount(admin,actor,user)
+  return undefined
+}
 async function link(admin:ReturnType<typeof createClient>,actor:Membership,employee:Employee,user:User,role:Role,email:string){
   const {error:m}=await admin.from('organization_memberships').upsert({organization_id:actor.organization_id,user_id:user.id,role,is_active:true},{onConflict:'organization_id,user_id'}); if(m)throw m
   const {error:e}=await admin.from('employees').update({user_id:user.id,email,portal_enabled:true}).eq('id',employee.id).eq('organization_id',actor.organization_id); if(e)throw e
@@ -75,24 +100,50 @@ Deno.serve(async(req:Request)=>{
         admin.from('organization_memberships').select('id,organization_id,user_id,role,is_active').eq('organization_id',actor.organization_id),allUsers(admin)])
       if(ee)throw ee; if(me)throw me
       const ms=(memberships??[]) as Membership[]; const byId=new Map(users.map(u=>[u.id,u])); const byEmail=new Map(users.filter(u=>u.email).map(u=>[emailOf(u.email),u])); const mbu=new Map(ms.map(m=>[m.user_id,m]))
-      const rows=((employees??[]) as Employee[]).map(e=>{ const emailUser=byEmail.get(emailOf(e.email)); const u=e.user_id?byId.get(e.user_id):emailUser&&mbu.has(emailUser.id)?emailUser:undefined; const m=u?mbu.get(u.id):undefined; return {employee_id:e.id,employee_code:e.employee_code,full_name:e.full_name,email:e.email,position_title:e.position_title,employee_status:e.status,employment_type:e.employment_type,attendance_required:e.attendance_required,portal_enabled:e.portal_enabled,user_id:u?.id??null,role:m?.role??null,membership_active:m?.is_active??false,access_status:accessStatus(u,m),invited_at:u?.invited_at??null,email_confirmed_at:u?.email_confirmed_at??null,last_sign_in_at:u?.last_sign_in_at??null,is_current_user:u?.id===actorUser.id} })
+      const rows=((employees??[]) as Employee[]).map(e=>{ const emailUser=byEmail.get(emailOf(e.email)); const u=e.user_id?byId.get(e.user_id):emailUser&&mbu.has(emailUser.id)?emailUser:undefined; const m=u?mbu.get(u.id):undefined; const loginEmail=u?.email??null; return {employee_id:e.id,employee_code:e.employee_code,full_name:e.full_name,email:e.email,employee_email:e.email,login_email:loginEmail,email_mismatch:Boolean(loginEmail&&emailOf(loginEmail)!==emailOf(e.email)),position_title:e.position_title,employee_status:e.status,employment_type:e.employment_type,attendance_required:e.attendance_required,portal_enabled:e.portal_enabled,user_id:u?.id??null,role:m?.role??null,membership_active:m?.is_active??false,access_status:accessStatus(u,m),invited_at:u?.invited_at??null,email_confirmed_at:u?.email_confirmed_at??null,last_sign_in_at:u?.last_sign_in_at??null,is_current_user:u?.id===actorUser.id} })
       const linked=new Set(rows.map(r=>r.user_id).filter(Boolean)); const standalone=ms.filter(m=>!linked.has(m.user_id)).map(m=>{const u=byId.get(m.user_id);return{employee_id:null,employee_code:null,full_name:String(u?.user_metadata?.full_name??u?.email??'Administrative account'),email:u?.email??null,position_title:'Administrative account',employee_status:null,employment_type:null,attendance_required:false,portal_enabled:false,user_id:m.user_id,role:m.role,membership_active:m.is_active,access_status:accessStatus(u,m),invited_at:u?.invited_at??null,email_confirmed_at:u?.email_confirmed_at??null,last_sign_in_at:u?.last_sign_in_at??null,is_current_user:m.user_id===actorUser.id}})
       return reply(req,{rows:[...standalone,...rows],assignable_roles:[...ROLES],actor_role:actor.role})
     }
 
     if(action==='invite'){
       const employee=await loadEmployee(admin,actor,uuid(body.employee_id,'Employee')); const role=roleOf(body.role); const email=emailOf(body.email); validEmail(email)
-      let user=await findByEmail(admin,email)
-      if(user&&employee.user_id&&employee.user_id!==user.id)throw new Error('This email belongs to a different login account.')
+      let currentUser:User|undefined
+      if(employee.user_id){ const {data,error}=await admin.auth.admin.getUserById(employee.user_id); if(error)throw error; currentUser=data.user??undefined }
+      if(currentUser&&emailOf(currentUser.email)!==email){
+        if(currentUser.email_confirmed_at)throw new Error('This employee already has an active login under another email. Use Change email in Users & access.')
+        await removePendingAccount(admin,actor,currentUser)
+      }
+      let user=await prepareEmailAccount(admin,actor,employee,email,currentUser&&emailOf(currentUser.email)===email?currentUser.id:null)
       if(user){ const {data:linkedEmployees,error}=await admin.from('employees').select('id,organization_id,full_name').eq('user_id',user.id); if(error)throw error; const crossTenant=(linkedEmployees??[]).find(item=>item.organization_id!==actor.organization_id); if(crossTenant)throw new Error('This email is already linked to another organization.'); const other=(linkedEmployees??[]).find(item=>item.organization_id===actor.organization_id&&item.id!==employee.id); if(other)throw new Error(`This login is already linked to ${other.full_name}.`) }
       let existingMemberships:Membership[]=[]
       if(user){ const {data,error}=await admin.from('organization_memberships').select('id,organization_id,user_id,role,is_active').eq('user_id',user.id); if(error)throw error; existingMemberships=(data??[]) as Membership[]; if(existingMemberships.some(m=>m.organization_id!==actor.organization_id))throw new Error('This email is already linked to another organization.') }
       let type='invitation'
       let replacedPendingInvite=false
       if(user?.email_confirmed_at){ await link(admin,actor,employee,user,role,email); const {error}=await admin.auth.resetPasswordForEmail(email,{redirectTo:destination(role)}); if(error)throw error; type='password_reset' }
-      else{ if(user){ replacedPendingInvite=true; const {error}=await admin.auth.admin.deleteUser(user.id); if(error)throw error; const {error:clearError}=await admin.from('employees').update({user_id:null,portal_enabled:false}).eq('id',employee.id).eq('organization_id',actor.organization_id); if(clearError)throw clearError } user=await invite(admin,employee,role,email); await link(admin,actor,employee,user,role,email) }
+      else{ if(user){ replacedPendingInvite=true; await removePendingAccount(admin,actor,user) } user=await invite(admin,employee,role,email); await link(admin,actor,employee,user,role,email) }
       await audit(admin,actor,actorUser.id,'INVITE_USER',user.id,{employee_id:employee.id,email,role,email_type:type,replaced_pending_invite:replacedPendingInvite},req)
       return reply(req,{ok:true,message:type==='invitation'?`Invitation sent to ${email}.`:`Access activated and a password setup email was sent to ${email}.`})
+    }
+
+    if(action==='change_email'){
+      const employee=await loadEmployee(admin,actor,uuid(body.employee_id,'Employee')); const email=emailOf(body.email); validEmail(email)
+      if(!employee.user_id)throw new Error('This employee does not have a login yet. Use Invite instead.')
+      const {data:currentResult,error:currentError}=await admin.auth.admin.getUserById(employee.user_id); if(currentError||!currentResult.user)throw new Error('Login account not found.')
+      const currentUser=currentResult.user; const oldEmail=emailOf(currentUser.email)
+      const {data:membership,error:membershipError}=await admin.from('organization_memberships').select('id,organization_id,user_id,role,is_active').eq('organization_id',actor.organization_id).eq('user_id',currentUser.id).maybeSingle(); if(membershipError)throw membershipError; if(!membership)throw new Error('This login does not belong to your organization.')
+      if(oldEmail===email){ const {error}=await admin.from('employees').update({email}).eq('id',employee.id).eq('organization_id',actor.organization_id); if(error)throw error; return reply(req,{ok:true,message:`This login already uses ${email}.`}) }
+      await prepareEmailAccount(admin,actor,employee,email,currentUser.id)
+      if(currentUser.email_confirmed_at){
+        const {error:updateError}=await admin.auth.admin.updateUserById(currentUser.id,{email}); if(updateError)throw updateError
+        const {error:employeeError}=await admin.from('employees').update({email}).eq('id',employee.id).eq('organization_id',actor.organization_id); if(employeeError)throw employeeError
+        await audit(admin,actor,actorUser.id,'CHANGE_USER_EMAIL',currentUser.id,{employee_id:employee.id,old_email:oldEmail,new_email:email,account_status:'active'},req)
+        return reply(req,{ok:true,message:`Login email changed to ${email}.`})
+      }
+      const role=membership.role as Role
+      await removePendingAccount(admin,actor,currentUser)
+      const invitedUser=await invite(admin,employee,role,email); await link(admin,actor,employee,invitedUser,role,email)
+      await audit(admin,actor,actorUser.id,'CHANGE_INVITATION_EMAIL',invitedUser.id,{employee_id:employee.id,old_email:oldEmail,new_email:email,replaced_user_id:currentUser.id},req)
+      return reply(req,{ok:true,message:`Invitation email changed. A new invitation was sent to ${email}.`})
     }
 
     if(action==='update_access'){
@@ -110,6 +161,14 @@ Deno.serve(async(req:Request)=>{
     if(action==='send_access_email'){
       const userId=uuid(body.user_id,'User'); const {data:m,error:membershipError}=await admin.from('organization_memberships').select('role').eq('organization_id',actor.organization_id).eq('user_id',userId).maybeSingle(); if(membershipError)throw membershipError; if(!m)throw new Error('This login does not belong to your organization.')
       const {data:u,error}=await admin.auth.admin.getUserById(userId); if(error||!u.user?.email)throw new Error('Login account not found.'); const role=m.role as Role
+      if(!u.user.email_confirmed_at){
+        const {data:e,error:employeeError}=await admin.from('employees').select('id,organization_id,user_id,employee_code,full_name,email,position_title,status,employment_type,attendance_required,portal_enabled').eq('organization_id',actor.organization_id).eq('user_id',userId).maybeSingle(); if(employeeError)throw employeeError; if(!e)throw new Error('This pending invitation is not linked to an employee.')
+        const employee=e as Employee; const email=emailOf(u.user.email)
+        if(emailOf(employee.email)!==email)throw new Error('The employee email changed after this invitation. Use Change invited email before resending.')
+        await removePendingAccount(admin,actor,u.user)
+        const invitedUser=await invite(admin,employee,role,email); await link(admin,actor,employee,invitedUser,role,email)
+        await audit(admin,actor,actorUser.id,'RESEND_INVITATION',invitedUser.id,{employee_id:employee.id,email,replaced_user_id:userId},req); return reply(req,{ok:true,message:`Invitation resent to ${email}.`})
+      }
       const {error:reset}=await admin.auth.resetPasswordForEmail(u.user.email,{redirectTo:destination(role)}); if(reset)throw reset
       await audit(admin,actor,actorUser.id,'SEND_PASSWORD_RESET',userId,{email:u.user.email},req); return reply(req,{ok:true,message:`Password setup/reset email sent to ${u.user.email}.`})
     }
