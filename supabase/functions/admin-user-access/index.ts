@@ -22,7 +22,7 @@ function publicError(error:unknown){
   if(!raw||raw.length>300||/[{}\[\]]/.test(raw))return 'The request could not be completed. Try again.'
   return raw
 }
-function uuid(v:unknown,label:string){ const s=String(v??''); if(!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(s)) throw new Error(`${label} is invalid.`); return s }
+function uuid(v:unknown,label:string){ const s=String(v??''); if(!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(s)) throw new Error(`${label} is invalid.`); return s }
 function roleOf(v:unknown):Role{ const r=String(v??'') as Role; if(!ROLES.includes(r)) throw new Error('Select a valid HRMS role.'); return r }
 function destination(role:Role){ return role==='employee'?`${EMPLOYEE_ORIGIN}/`:`${ADMIN_ORIGIN}/admin/` }
 function secretKey(){
