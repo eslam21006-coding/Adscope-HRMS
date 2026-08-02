@@ -387,18 +387,38 @@ test('Owners can correct pending invitation emails without keeping the wrong log
 
   assert.match(source, /action==='change_email'/)
   assert.match(source, /CHANGE_INVITATION_EMAIL/)
-  assert.match(source, /await removePendingAccount\(admin,actor,currentUser\)/)
+  assert.match(source, /await replacePendingInvitation\(admin,actor,employee,currentUser,role,email\)/)
   assert.match(source, /A new invitation was sent to \$\{email\}/)
   assert.match(source, /email_mismatch:Boolean\(loginEmail/)
   assert.match(source, /The employee email changed after this invitation\. Use Change invited email before resending\./)
   assert.ok(source.indexOf('This email is already linked to another organization.') < source.indexOf("admin.auth.admin.deleteUser(user.id)"), 'Cross-company checks must run before a pending login is deleted')
 })
 
+test('Pending invitation replacement keeps the old access until the new invitation exists', () => {
+  const source = readFileSync(new URL('../supabase/functions/admin-user-access/index.ts', import.meta.url), 'utf8')
+  const helperStart = source.indexOf('async function replacePendingInvitation')
+  const helperEnd = source.indexOf('function accessStatus', helperStart)
+  const helper = source.slice(helperStart, helperEnd)
+  const inviteNew = helper.indexOf('const newUser=await invite')
+  const removeOldMembership = helper.indexOf("eq('user_id',oldUser.id)", inviteNew)
+  const linkNew = helper.indexOf('await link(admin,actor,employee,newUser,role,email)', removeOldMembership)
+
+  assert.ok(helperStart >= 0 && inviteNew >= 0 && removeOldMembership > inviteNew && linkNew > removeOldMembership)
+  assert.match(helper, /for\(const membership of oldMemberships\).*upsert/)
+  assert.match(helper, /update\(\{user_id:oldUser\.id,portal_enabled:true\}\)/)
+
+  const resendStart = source.indexOf("if(action==='send_access_email')")
+  const resendEnd = source.indexOf("if(action==='delete_test')", resendStart)
+  const resend = source.slice(resendStart, resendEnd)
+  assert.match(resend, /RESEND_PENDING_ACCESS_EMAIL/)
+  assert.doesNotMatch(resend, /removePendingAccount|deleteUser/)
+})
+
 test('Active login email changes keep the existing account and organization membership', () => {
   const source = readFileSync(new URL('../supabase/functions/admin-user-access/index.ts', import.meta.url), 'utf8')
   const changeStart = source.indexOf("if(action==='change_email')")
   const updateStart = source.indexOf('if(currentUser.email_confirmed_at)', changeStart)
-  const pendingStart = source.indexOf('await removePendingAccount(admin,actor,currentUser)', updateStart)
+  const pendingStart = source.indexOf('await replacePendingInvitation(admin,actor,employee,currentUser,role,email)', updateStart)
   const activeBranch = source.slice(updateStart, pendingStart)
 
   assert.ok(changeStart >= 0 && updateStart > changeStart && pendingStart > updateStart)
@@ -415,7 +435,7 @@ test('Users & access exposes email correction and preserves the selected setting
   assert.match(source, /selectedSettingsTab=state\.settingsTab\|\|'company'/)
   assert.match(source, /data-user-email/)
   assert.match(source, /action:'change_email'/)
-  assert.match(source, /Resend invitation/)
+  assert.match(source, /Resend access email/)
   assert.match(source, /user-access-email-management-v1/)
   assert.match(source, /fixUserAccessManagement\(functionErrorHtml, bundle\)/)
 })

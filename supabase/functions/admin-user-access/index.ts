@@ -74,6 +74,26 @@ async function link(admin:ReturnType<typeof createClient>,actor:Membership,emplo
 async function invite(admin:ReturnType<typeof createClient>,employee:Employee,role:Role,email:string){
   const {data,error}=await admin.auth.admin.inviteUserByEmail(email,{redirectTo:destination(role),data:{full_name:employee.full_name,employee_code:employee.employee_code,hrms_destination:role==='employee'?'employee':'admin',hrms_invited_at:new Date().toISOString()}}); if(error)throw error; if(!data.user)throw new Error('The invitation account could not be created.'); return data.user
 }
+async function replacePendingInvitation(admin:ReturnType<typeof createClient>,actor:Membership,employee:Employee,oldUser:User,role:Role,email:string){
+  const relations=await accountRelations(admin,oldUser.id)
+  if(relations.employees.some(item=>item.organization_id!==actor.organization_id)||relations.memberships.some(item=>item.organization_id!==actor.organization_id))throw new Error('This invitation is linked to another organization and cannot be replaced.')
+  const oldMemberships=relations.memberships.filter(item=>item.organization_id===actor.organization_id)
+  const newUser=await invite(admin,employee,role,email)
+  const {error:removeMembershipError}=await admin.from('organization_memberships').delete().eq('organization_id',actor.organization_id).eq('user_id',oldUser.id)
+  if(removeMembershipError){ await admin.auth.admin.deleteUser(newUser.id).catch(()=>{}); throw removeMembershipError }
+  try{
+    await link(admin,actor,employee,newUser,role,email)
+  }catch(error){
+    await admin.from('organization_memberships').delete().eq('organization_id',actor.organization_id).eq('user_id',newUser.id)
+    for(const membership of oldMemberships)await admin.from('organization_memberships').upsert({organization_id:membership.organization_id,user_id:membership.user_id,role:membership.role,is_active:membership.is_active},{onConflict:'organization_id,user_id'})
+    await admin.from('employees').update({user_id:oldUser.id,portal_enabled:true}).eq('id',employee.id).eq('organization_id',actor.organization_id)
+    await admin.auth.admin.deleteUser(newUser.id).catch(()=>{})
+    throw error
+  }
+  const {error:oldUserDeleteError}=await admin.auth.admin.deleteUser(oldUser.id)
+  if(oldUserDeleteError)console.error(JSON.stringify({event:'stale_pending_auth_cleanup_failed',user_id:oldUser.id,error:oldUserDeleteError.message.slice(0,300)}))
+  return {user:newUser,old_auth_deleted:!oldUserDeleteError}
+}
 function accessStatus(user:User|undefined,m:Membership|undefined){ if(!user)return'not_invited'; if(!m)return user.email_confirmed_at?'no_role':'invitation_pending'; if(!m.is_active||user.banned_until&&new Date(user.banned_until)>new Date())return'disabled'; if(!user.email_confirmed_at)return'invitation_pending'; return'active' }
 
 Deno.serve(async(req:Request)=>{
@@ -109,20 +129,27 @@ Deno.serve(async(req:Request)=>{
       const employee=await loadEmployee(admin,actor,uuid(body.employee_id,'Employee')); const role=roleOf(body.role); const email=emailOf(body.email); validEmail(email)
       let currentUser:User|undefined
       if(employee.user_id){ const {data,error}=await admin.auth.admin.getUserById(employee.user_id); if(error)throw error; currentUser=data.user??undefined }
+      let previousPendingUser:User|undefined
       if(currentUser&&emailOf(currentUser.email)!==email){
         if(currentUser.email_confirmed_at)throw new Error('This employee already has an active login under another email. Use Change email in Users & access.')
-        await removePendingAccount(admin,actor,currentUser)
+        previousPendingUser=currentUser
       }
       let user=await prepareEmailAccount(admin,actor,employee,email,currentUser&&emailOf(currentUser.email)===email?currentUser.id:null)
+      if(previousPendingUser){
+        const replacement=await replacePendingInvitation(admin,actor,employee,previousPendingUser,role,email)
+        await audit(admin,actor,actorUser.id,'CHANGE_INVITATION_EMAIL',replacement.user.id,{employee_id:employee.id,old_email:emailOf(previousPendingUser.email),new_email:email,replaced_user_id:previousPendingUser.id,old_auth_deleted:replacement.old_auth_deleted},req)
+        return reply(req,{ok:true,message:`Invitation email changed. A new invitation was sent to ${email}.`})
+      }
       if(user){ const {data:linkedEmployees,error}=await admin.from('employees').select('id,organization_id,full_name').eq('user_id',user.id); if(error)throw error; const crossTenant=(linkedEmployees??[]).find(item=>item.organization_id!==actor.organization_id); if(crossTenant)throw new Error('This email is already linked to another organization.'); const other=(linkedEmployees??[]).find(item=>item.organization_id===actor.organization_id&&item.id!==employee.id); if(other)throw new Error(`This login is already linked to ${other.full_name}.`) }
       let existingMemberships:Membership[]=[]
       if(user){ const {data,error}=await admin.from('organization_memberships').select('id,organization_id,user_id,role,is_active').eq('user_id',user.id); if(error)throw error; existingMemberships=(data??[]) as Membership[]; if(existingMemberships.some(m=>m.organization_id!==actor.organization_id))throw new Error('This email is already linked to another organization.') }
       let type='invitation'
       let replacedPendingInvite=false
       if(user?.email_confirmed_at){ await link(admin,actor,employee,user,role,email); const {error}=await admin.auth.resetPasswordForEmail(email,{redirectTo:destination(role)}); if(error)throw error; type='password_reset' }
-      else{ if(user){ replacedPendingInvite=true; await removePendingAccount(admin,actor,user) } user=await invite(admin,employee,role,email); await link(admin,actor,employee,user,role,email) }
+      else if(user){ await link(admin,actor,employee,user,role,email); const {error}=await admin.auth.resetPasswordForEmail(email,{redirectTo:destination(role)}); if(error)throw error; type='pending_access_email' }
+      else{ user=await invite(admin,employee,role,email); await link(admin,actor,employee,user,role,email) }
       await audit(admin,actor,actorUser.id,'INVITE_USER',user.id,{employee_id:employee.id,email,role,email_type:type,replaced_pending_invite:replacedPendingInvite},req)
-      return reply(req,{ok:true,message:type==='invitation'?`Invitation sent to ${email}.`:`Access activated and a password setup email was sent to ${email}.`})
+      return reply(req,{ok:true,message:type==='invitation'?`Invitation sent to ${email}.`:type==='pending_access_email'?`A new access email was sent to ${email}.`:`Access activated and a password setup email was sent to ${email}.`})
     }
 
     if(action==='change_email'){
@@ -140,9 +167,8 @@ Deno.serve(async(req:Request)=>{
         return reply(req,{ok:true,message:`Login email changed to ${email}.`})
       }
       const role=membership.role as Role
-      await removePendingAccount(admin,actor,currentUser)
-      const invitedUser=await invite(admin,employee,role,email); await link(admin,actor,employee,invitedUser,role,email)
-      await audit(admin,actor,actorUser.id,'CHANGE_INVITATION_EMAIL',invitedUser.id,{employee_id:employee.id,old_email:oldEmail,new_email:email,replaced_user_id:currentUser.id},req)
+      const replacement=await replacePendingInvitation(admin,actor,employee,currentUser,role,email)
+      await audit(admin,actor,actorUser.id,'CHANGE_INVITATION_EMAIL',replacement.user.id,{employee_id:employee.id,old_email:oldEmail,new_email:email,replaced_user_id:currentUser.id,old_auth_deleted:replacement.old_auth_deleted},req)
       return reply(req,{ok:true,message:`Invitation email changed. A new invitation was sent to ${email}.`})
     }
 
@@ -165,9 +191,8 @@ Deno.serve(async(req:Request)=>{
         const {data:e,error:employeeError}=await admin.from('employees').select('id,organization_id,user_id,employee_code,full_name,email,position_title,status,employment_type,attendance_required,portal_enabled').eq('organization_id',actor.organization_id).eq('user_id',userId).maybeSingle(); if(employeeError)throw employeeError; if(!e)throw new Error('This pending invitation is not linked to an employee.')
         const employee=e as Employee; const email=emailOf(u.user.email)
         if(emailOf(employee.email)!==email)throw new Error('The employee email changed after this invitation. Use Change invited email before resending.')
-        await removePendingAccount(admin,actor,u.user)
-        const invitedUser=await invite(admin,employee,role,email); await link(admin,actor,employee,invitedUser,role,email)
-        await audit(admin,actor,actorUser.id,'RESEND_INVITATION',invitedUser.id,{employee_id:employee.id,email,replaced_user_id:userId},req); return reply(req,{ok:true,message:`Invitation resent to ${email}.`})
+        const {error:reset}=await admin.auth.resetPasswordForEmail(email,{redirectTo:destination(role)}); if(reset)throw reset
+        await audit(admin,actor,actorUser.id,'RESEND_PENDING_ACCESS_EMAIL',userId,{employee_id:employee.id,email},req); return reply(req,{ok:true,message:`A new access email was sent to ${email}.`})
       }
       const {error:reset}=await admin.auth.resetPasswordForEmail(u.user.email,{redirectTo:destination(role)}); if(reset)throw reset
       await audit(admin,actor,actorUser.id,'SEND_PASSWORD_RESET',userId,{email:u.user.email},req); return reply(req,{ok:true,message:`Password setup/reset email sent to ${u.user.email}.`})
