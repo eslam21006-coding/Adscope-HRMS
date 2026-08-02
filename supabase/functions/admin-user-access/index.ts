@@ -88,9 +88,10 @@ Deno.serve(async(req:Request)=>{
       let existingMemberships:Membership[]=[]
       if(user){ const {data,error}=await admin.from('organization_memberships').select('id,organization_id,user_id,role,is_active').eq('user_id',user.id); if(error)throw error; existingMemberships=(data??[]) as Membership[]; if(existingMemberships.some(m=>m.organization_id!==actor.organization_id))throw new Error('This email is already linked to another organization.') }
       let type='invitation'
+      let replacedPendingInvite=false
       if(user?.email_confirmed_at){ await link(admin,actor,employee,user,role,email); const {error}=await admin.auth.resetPasswordForEmail(email,{redirectTo:destination(role)}); if(error)throw error; type='password_reset' }
-      else{ if(user){ if(employee.user_id!==user.id&&!existingMemberships.some(m=>m.organization_id===actor.organization_id))throw new Error('An unconfirmed account already exists for this email. Contact an Owner to verify it before reinviting.'); const {error}=await admin.auth.admin.deleteUser(user.id); if(error)throw error; const {error:clearError}=await admin.from('employees').update({user_id:null,portal_enabled:false}).eq('id',employee.id).eq('organization_id',actor.organization_id); if(clearError)throw clearError } user=await invite(admin,employee,role,email); await link(admin,actor,employee,user,role,email) }
-      await audit(admin,actor,actorUser.id,'INVITE_USER',user.id,{employee_id:employee.id,email,role,email_type:type},req)
+      else{ if(user){ replacedPendingInvite=true; const {error}=await admin.auth.admin.deleteUser(user.id); if(error)throw error; const {error:clearError}=await admin.from('employees').update({user_id:null,portal_enabled:false}).eq('id',employee.id).eq('organization_id',actor.organization_id); if(clearError)throw clearError } user=await invite(admin,employee,role,email); await link(admin,actor,employee,user,role,email) }
+      await audit(admin,actor,actorUser.id,'INVITE_USER',user.id,{employee_id:employee.id,email,role,email_type:type,replaced_pending_invite:replacedPendingInvite},req)
       return reply(req,{ok:true,message:type==='invitation'?`Invitation sent to ${email}.`:`Access activated and a password setup email was sent to ${email}.`})
     }
 
