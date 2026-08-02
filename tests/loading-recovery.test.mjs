@@ -359,6 +359,18 @@ test('Administrative account deletion is tenant-scoped and fails closed on histo
   assert.match(source, /another organization/)
 })
 
+test('Owners can replace safe legacy pending invitations without weakening account isolation', () => {
+  const source = readFileSync(new URL('../supabase/functions/admin-user-access/index.ts', import.meta.url), 'utf8')
+  const conflictCheck = source.indexOf("This email is already linked to another organization.")
+  const duplicateEmployeeCheck = source.indexOf('This login is already linked to ${other.full_name}.')
+  const deletePendingUser = source.indexOf('replacedPendingInvite=true; const {error}=await admin.auth.admin.deleteUser(user.id)')
+
+  assert.ok(conflictCheck >= 0 && conflictCheck < deletePendingUser, 'Cross-organization membership must be rejected before replacing a pending invite')
+  assert.ok(duplicateEmployeeCheck >= 0 && duplicateEmployeeCheck < deletePendingUser, 'A login linked to another employee must be rejected before replacing a pending invite')
+  assert.match(source, /replaced_pending_invite:replacedPendingInvite/)
+  assert.doesNotMatch(source, /An unconfirmed account already exists for this email/)
+})
+
 test('Failed user-access actions create a structured runtime and audit record', () => {
   const source = readFileSync(new URL('../supabase/functions/admin-user-access/index.ts', import.meta.url), 'utf8')
   assert.match(source, /admin_user_access_failed/)
