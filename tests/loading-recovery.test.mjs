@@ -371,6 +371,14 @@ test('Owners can replace safe legacy pending invitations without weakening accou
   assert.doesNotMatch(source, /An unconfirmed account already exists for this email/)
 })
 
+test('User-access validation accepts PostgreSQL UUIDs without RFC version bits', () => {
+  const source = readFileSync(new URL('../supabase/functions/admin-user-access/index.ts', import.meta.url), 'utf8')
+
+  assert.match(source, /\^\[0-9a-f\]\{8\}-\[0-9a-f\]\{4\}-\[0-9a-f\]\{4\}-\[0-9a-f\]\{4\}-\[0-9a-f\]\{12\}\$/)
+  assert.doesNotMatch(source, /\[1-5\]\[0-9a-f\]\{3\}/)
+  assert.doesNotMatch(source, /\[89ab\]\[0-9a-f\]\{3\}/)
+})
+
 test('Failed user-access actions create a structured runtime and audit record', () => {
   const source = readFileSync(new URL('../supabase/functions/admin-user-access/index.ts', import.meta.url), 'utf8')
   assert.match(source, /admin_user_access_failed/)
