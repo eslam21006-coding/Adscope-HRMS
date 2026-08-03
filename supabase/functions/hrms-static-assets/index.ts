@@ -139,7 +139,7 @@ const CHANGE_EMAIL_FORM = [
   "    const pending=row.access_status==='invitation_pending';",
   "    const currentEmail=row.login_email||row.email||'';",
   "    const employeeEmail=row.employee_email||row.email||'';",
-  "    showModal(pending?'Change invited email':'Change login email',`<form><label class=\"field\"><span>New email</span><input name=\"email\" type=\"email\" value=\"${esc(employeeEmail)}\" required></label><div class=\"notice\"><strong>Current ${pending?'invitation':'login'}</strong><p>${esc(currentEmail||'No email')}</p></div><div class=\"notice\"><strong>${pending?'A new invitation will be sent':'Sign-in email will change immediately'}</strong><p>${pending?'The old pending invitation will stop working.':'The employee must use the new email the next time they sign in.'}</p></div><div class=\"button-row\"><button class=\"primary\" type=\"submit\">${pending?'Change email and send':'Change email'}</button><button class=\"ghost\" type=\"button\" data-cancel>Cancel</button></div></form>`,async event=>{event.preventDefault();const fd=new FormData(event.currentTarget);const button=event.currentTarget.querySelector('[type=\"submit\"]');button.disabled=true;button.textContent=pending?'Sending…':'Saving…';try{const response=await functionCall('admin-user-access',{action:'change_email',employee_id:row.employee_id,email:fd.get('email')});closeModal();toast(response.message,'success');state.settingsTab='users';await loadSettingsTab('users');}catch(error){button.disabled=false;button.textContent=pending?'Change email and send':'Change email';toast(humanizeError(error),'error');}});",
+  "    showModal(pending?'Change invited email':'Change login email',`<form><label class=\"field\"><span>New email</span><input name=\"email\" type=\"email\" value=\"${esc(employeeEmail)}\" required></label><div class=\"notice\"><strong>Current ${pending?'invitation':'login'}</strong><p>${esc(currentEmail||'No email')}</p></div><div class=\"notice\"><strong>${pending?'A new invitation will be sent':'Sign-in email will change immediately'}</strong><p>${esc(pending?'The old pending invitation will stop working.':'The employee must use the new email the next time they sign in.')}</p></div><div class=\"button-row\"><button class=\"primary\" type=\"submit\">${pending?'Change email and send':'Change email'}</button><button class=\"ghost\" type=\"button\" data-cancel>Cancel</button></div></form>`,async event=>{event.preventDefault();const fd=new FormData(event.currentTarget);const button=event.currentTarget.querySelector('[type=\"submit\"]');button.disabled=true;button.textContent=pending?'Sending…':'Saving…';try{const response=await functionCall('admin-user-access',{action:'change_email',employee_id:row.employee_id,email:fd.get('email')});closeModal();toast(response.message,'success');state.settingsTab='users';await loadSettingsTab('users');}catch(error){button.disabled=false;button.textContent=pending?'Change email and send':'Change email';toast(humanizeError(error),'error');}});",
   "  }",
   "",
 ].join('\n')
@@ -159,7 +159,8 @@ const INITIALIZATION_RECOVERY_PATCH = String.raw`<script data-adscope-init-recov
   }
 
   function initializationRendered(){
-    return Boolean(initializationRoot&&initializationRoot.querySelector('.login-page,.shell,.page'));
+    if(!initializationRoot)return false;
+    return Boolean(initializationRoot.querySelector('.login-page,.shell,.page,main,aside,nav,form,button,input,[data-page],[data-action],[role="main"]'));
   }
 
   function markInitializationComplete(){
