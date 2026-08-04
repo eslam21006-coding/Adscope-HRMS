@@ -13,6 +13,7 @@ const employeeSourcePath = new URL('../attendance/portal.js', import.meta.url)
 const adminFixturePath = new URL('./fixtures/admin-bundle.html', import.meta.url)
 const employeeFixturePath = new URL('./fixtures/attendance-bundle.html', import.meta.url)
 const employeeSaveFixturePath = new URL('./fixtures/admin-employee-save-flow.js', import.meta.url)
+const citextMigrationPath = new URL('../supabase/migrations/20260801161114_fix_request_code_citext_search_path.sql', import.meta.url)
 
 function inlineScript(html) {
   const match = html.match(/<script>([\s\S]*?)<\/script>/i)
@@ -205,7 +206,7 @@ test('Checked-in bundle shapes accept recovery injection and portal URL replacem
 
 test('Employee save patch preserves a valid database state until compensation and shift are saved', () => {
   const source = readFileSync(staticFunctionPath, 'utf8')
-  const match = source.match(/const EMPLOYEE_SAVE_ORDER_BLOCK = String\.raw`([\s\S]*?)`\n\nconst INITIALIZATION_RECOVERY_PATCH/)
+  const match = source.match(/const EMPLOYEE_SAVE_ORDER_BLOCK = String\.raw`([\s\S]*?)`\n\nconst SETTINGS_TAB_ORIGINAL/)
   assert.ok(match, 'Employee save ordering block must be present')
 
   const original = readFileSync(employeeSaveFixturePath, 'utf8')
@@ -249,6 +250,36 @@ test('Employee save patch preserves a valid database state until compensation an
   assert.equal(employeeRule({ ...activeNewEmployeeBeforeShift, current_shift_id:'assigned-shift' }), true)
 })
 
+test('Admin Edge Function failures use the function response body instead of the generic SDK message', async () => {
+  const source = readFileSync(staticFunctionPath, 'utf8')
+  const match = source.match(/const FUNCTION_CALL_PATCH = String\.raw`([\s\S]*?)`\nconst EMPLOYEE_SAVE_ORDER_BLOCK/)
+  assert.ok(match, 'Edge Function error-body patch must be present')
+
+  const context = {
+    client: {
+      functions: {
+        async invoke() {
+          return {
+            data:null,
+            error:{
+              message:'Edge Function returned a non-2xx status code',
+              context:{ async json(){ return { error:'This login account needs to be linked before access can be activated.' } } },
+            },
+          }
+        },
+      },
+    },
+  }
+  vm.runInNewContext(`${match[1]}\nglobalThis.callForTest=functionCall;`, context)
+  await assert.rejects(
+    context.callForTest('admin-user-access', { action:'invite' }),
+    /This login account needs to be linked before access can be activated/,
+  )
+  assert.match(source, /fixFunctionErrorBody\(saveOrderHtml, bundle\)/)
+  assert.match(source, /function-errors-response-body-v1/)
+  assert.match(source, /error\.context/)
+})
+
 test('Vercel routing keeps employee access available during the portal-domain transition', () => {
   const config = JSON.parse(readFileSync(new URL('../vercel.json', import.meta.url), 'utf8'))
   assert.equal(config.rewrites[0].source, '/')
@@ -285,6 +316,33 @@ test('Static bundle failures return a safe public message', () => {
   assert.doesNotMatch(source, /\{ error: error instanceof Error/)
 })
 
+test('Undefined database objects are translated instead of exposed to Owners', () => {
+  const source = readFileSync(staticFunctionPath, 'utf8')
+  assert.ok(source.includes('(type|relation|function|schema|column|operator) .* does not exist'))
+  for (const sqlState of ['42P01', '42703', '42704', '42883', '3F000']) {
+    assert.match(source, new RegExp(sqlState))
+  }
+  assert.match(source, /The HR service could not process this request\. The change was not saved\. Try again\./)
+})
+
+test('Request-code functions resolve citext from the locked extensions schema', () => {
+  const migration = readFileSync(citextMigrationPath, 'utf8')
+  const functions = [
+    'flag_unauthorized_breaks',
+    'flag_unexcused_absences',
+    'submit_advance_request',
+    'submit_leave_request',
+    'submit_permission_request',
+  ]
+
+  for (const functionName of functions) {
+    assert.match(migration, new RegExp(`alter function public\\.${functionName}\\(`))
+  }
+
+  assert.equal((migration.match(/set search_path = public, app_private, extensions;/g) ?? []).length, functions.length)
+  assert.doesNotMatch(migration, /create extension|drop extension|security definer|grant\s+create/i)
+})
+
 test('Owner-only Edge Functions use explicit origin allowlists', () => {
   for (const relative of ['supabase/functions/admin-user-access/index.ts', 'supabase/functions/disciplinary-email/index.ts']) {
     const source = readFileSync(new URL(relative, projectRoot), 'utf8')
@@ -299,6 +357,99 @@ test('Administrative account deletion is tenant-scoped and fails closed on histo
   assert.match(source, /checks\.some\(r=>r\.error\)/)
   assert.match(source, /deleteMembershipError/)
   assert.match(source, /another organization/)
+})
+
+test('Owners can replace safe legacy pending invitations without weakening account isolation', () => {
+  const source = readFileSync(new URL('../supabase/functions/admin-user-access/index.ts', import.meta.url), 'utf8')
+  const prepareStart = source.indexOf('async function prepareEmailAccount')
+  const duplicateEmployeeCheck = source.indexOf('if(claimant)throw new Error', prepareStart)
+  const removeStalePendingUser = source.indexOf('await removePendingAccount(admin,actor,user)', prepareStart)
+  const removalStart = source.indexOf('async function removePendingAccount')
+  const conflictCheck = source.indexOf("This email is already linked to another organization.", removalStart)
+  const deletePendingUser = source.indexOf('admin.auth.admin.deleteUser(user.id)', removalStart)
+
+  assert.ok(conflictCheck >= 0 && conflictCheck < deletePendingUser, 'Cross-organization membership must be rejected before replacing a pending invite')
+  assert.ok(duplicateEmployeeCheck >= 0 && duplicateEmployeeCheck < removeStalePendingUser, 'A login still claimed by another employee must be rejected before replacing a pending invite')
+  assert.match(source, /replaced_pending_invite:replacedPendingInvite/)
+  assert.doesNotMatch(source, /An unconfirmed account already exists for this email/)
+})
+
+test('User-access validation accepts PostgreSQL UUIDs without RFC version bits', () => {
+  const source = readFileSync(new URL('../supabase/functions/admin-user-access/index.ts', import.meta.url), 'utf8')
+
+  assert.match(source, /\^\[0-9a-f\]\{8\}-\[0-9a-f\]\{4\}-\[0-9a-f\]\{4\}-\[0-9a-f\]\{4\}-\[0-9a-f\]\{12\}\$/)
+  assert.doesNotMatch(source, /\[1-5\]\[0-9a-f\]\{3\}/)
+  assert.doesNotMatch(source, /\[89ab\]\[0-9a-f\]\{3\}/)
+})
+
+test('Owners can correct pending invitation emails without keeping the wrong login linked', () => {
+  const source = readFileSync(new URL('../supabase/functions/admin-user-access/index.ts', import.meta.url), 'utf8')
+
+  assert.match(source, /action==='change_email'/)
+  assert.match(source, /CHANGE_INVITATION_EMAIL/)
+  assert.match(source, /await replacePendingInvitation\(admin,actor,employee,currentUser,role,email\)/)
+  assert.match(source, /A new invitation was sent to \$\{email\}/)
+  assert.match(source, /email_mismatch:Boolean\(loginEmail/)
+  assert.match(source, /The employee email changed after this invitation\. Use Change invited email before resending\./)
+  assert.ok(source.indexOf('This email is already linked to another organization.') < source.indexOf("admin.auth.admin.deleteUser(user.id)"), 'Cross-company checks must run before a pending login is deleted')
+})
+
+test('Pending invitation replacement keeps the old access until the new invitation exists', () => {
+  const source = readFileSync(new URL('../supabase/functions/admin-user-access/index.ts', import.meta.url), 'utf8')
+  const helperStart = source.indexOf('async function replacePendingInvitation')
+  const helperEnd = source.indexOf('function accessStatus', helperStart)
+  const helper = source.slice(helperStart, helperEnd)
+  const inviteNew = helper.indexOf('const newUser=await invite')
+  const removeOldMembership = helper.indexOf("eq('user_id',oldUser.id)", inviteNew)
+  const linkNew = helper.indexOf('await link(admin,actor,employee,newUser,role,email)', removeOldMembership)
+
+  assert.ok(helperStart >= 0 && inviteNew >= 0 && removeOldMembership > inviteNew && linkNew > removeOldMembership)
+  assert.match(helper, /for\(const membership of oldMemberships\).*upsert/)
+  assert.match(helper, /update\(\{user_id:oldUser\.id,portal_enabled:true\}\)/)
+
+  const resendStart = source.indexOf("if(action==='send_access_email')")
+  const resendEnd = source.indexOf("if(action==='delete_test')", resendStart)
+  const resend = source.slice(resendStart, resendEnd)
+  assert.match(resend, /RESEND_PENDING_ACCESS_EMAIL/)
+  assert.doesNotMatch(resend, /removePendingAccount|deleteUser/)
+})
+
+test('Active login email changes keep the existing account and organization membership', () => {
+  const source = readFileSync(new URL('../supabase/functions/admin-user-access/index.ts', import.meta.url), 'utf8')
+  const changeStart = source.indexOf("if(action==='change_email')")
+  const updateStart = source.indexOf('if(currentUser.email_confirmed_at)', changeStart)
+  const pendingStart = source.indexOf('await replacePendingInvitation(admin,actor,employee,currentUser,role,email)', updateStart)
+  const activeBranch = source.slice(updateStart, pendingStart)
+
+  assert.ok(changeStart >= 0 && updateStart > changeStart && pendingStart > updateStart)
+  assert.match(activeBranch, /admin\.auth\.admin\.updateUserById\(currentUser\.id,\{email\}\)/)
+  assert.match(activeBranch, /CHANGE_USER_EMAIL/)
+  assert.doesNotMatch(activeBranch, /deleteUser|organization_memberships.*delete/)
+})
+
+test('Users & access exposes email correction and preserves the selected settings tab', () => {
+  const source = readFileSync(staticFunctionPath, 'utf8')
+
+  assert.match(source, /data-adscope-user-access="email-management-v1"/)
+  assert.match(source, /state\.settingsTab=button\.dataset\.settingsTab/)
+  assert.match(source, /selectedSettingsTab=state\.settingsTab\|\|'company'/)
+  assert.match(source, /data-user-email/)
+  assert.match(source, /action:'change_email'/)
+  assert.match(source, /Resend access email/)
+  assert.match(source, /user-access-email-management-v1/)
+  assert.match(source, /fixUserAccessManagement\(functionErrorHtml, bundle\)/)
+})
+
+test('Failed user-access actions create a structured runtime and audit record', () => {
+  const source = readFileSync(new URL('../supabase/functions/admin-user-access/index.ts', import.meta.url), 'utf8')
+  assert.match(source, /admin_user_access_failed/)
+  assert.match(source, /admin_user_access_audit_failed/)
+  assert.match(source, /request_id:requestId/)
+  assert.match(source, /FAILED_\$\{action/)
+  assert.match(source, /User access action failed in the HRMS admin portal/)
+  assert.match(source, /catch\(auditError\)/)
+  assert.ok(source.indexOf("return reply(req,{error:message,request_id:requestId}") > source.indexOf('catch(auditError)'), 'The sanitized response must remain after the isolated audit failure handler')
+  assert.match(source, /\{error:message,request_id:requestId\}/)
 })
 
 test('Disciplinary email delivery is organization-scoped, bounded, and idempotent', () => {
