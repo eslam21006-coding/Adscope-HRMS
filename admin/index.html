@@ -25,6 +25,155 @@
         document.getElementById('retryPortal').addEventListener('click', loadPortal);
       }
 
+      function attendanceFilterPatch() {
+        const source = `(function(){
+  'use strict';
+  if(window.__ADSCOPE_ATTENDANCE_FILTERS__)return;
+  window.__ADSCOPE_ATTENDANCE_FILTERS__=true;
+  var filterState={date:'',employee:'',mode:'all'};
+  var currentTable=null;
+  var timer=null;
+
+  function attendanceOpen(){
+    var heading=document.querySelector('.topbar h1');
+    return Boolean(heading&&heading.textContent.trim()==='Attendance'&&document.getElementById('content'));
+  }
+
+  function findAttendanceTable(){
+    var tables=Array.from(document.querySelectorAll('#content table.data-table'));
+    return tables.find(function(table){
+      var headings=Array.from(table.querySelectorAll('thead th')).map(function(cell){return cell.textContent.trim();});
+      return headings[0]==='Date'&&headings[1]==='Employee'&&headings.indexOf('Check in')>=0&&headings.indexOf('Check out')>=0;
+    })||null;
+  }
+
+  function monthBounds(){
+    var input=document.getElementById('activeMonth');
+    var month=input&&input.value;
+    if(!/^\\d{4}-\\d{2}$/.test(String(month||'')))return {min:'',max:''};
+    var parts=month.split('-').map(Number);
+    return {min:month+'-01',max:new Date(Date.UTC(parts[0],parts[1],0)).toISOString().slice(0,10)};
+  }
+
+  function rowDetails(row){
+    var cells=row.cells||[];
+    var date=cells[0]?cells[0].textContent.trim():'';
+    var employeeCell=cells[1];
+    var codeNode=employeeCell&&employeeCell.querySelector('.code');
+    var strongNode=employeeCell&&employeeCell.querySelector('strong');
+    var employeeCode=codeNode?codeNode.textContent.trim():'';
+    var employeeName=strongNode?strongNode.textContent.trim():(employeeCell?employeeCell.textContent.trim():'');
+    var checkIn=cells[3]?cells[3].textContent.trim():'';
+    var attended=Boolean(checkIn&&checkIn!=='—'&&checkIn!=='-');
+    return {date:date,employeeCode:employeeCode,employeeName:employeeName,attended:attended};
+  }
+
+  function rowsFor(table){
+    return Array.from(table.querySelectorAll('tbody tr')).filter(function(row){return row.cells&&row.cells.length>1;});
+  }
+
+  function fillEmployees(select,rows){
+    var employees=new Map();
+    rows.forEach(function(row){
+      var details=rowDetails(row);
+      var key=details.employeeCode||details.employeeName;
+      if(key&&!employees.has(key))employees.set(key,details.employeeName+(details.employeeCode?' ('+details.employeeCode+')':''));
+    });
+    var previous=filterState.employee;
+    select.innerHTML='';
+    var all=document.createElement('option');
+    all.value='';all.textContent='All employees';select.appendChild(all);
+    Array.from(employees.entries()).sort(function(a,b){return a[1].localeCompare(b[1]);}).forEach(function(entry){
+      var option=document.createElement('option');
+      option.value=entry[0];option.textContent=entry[1];select.appendChild(option);
+    });
+    if(previous&&employees.has(previous))select.value=previous;
+    else if(previous){filterState.employee='';select.value='';}
+  }
+
+  function applyFilters(table,panel){
+    var rows=rowsFor(table);
+    var visible=0;
+    rows.forEach(function(row){
+      var details=rowDetails(row);
+      var employeeKey=details.employeeCode||details.employeeName;
+      var matchesDate=!filterState.date||details.date===filterState.date;
+      var matchesEmployee=!filterState.employee||employeeKey===filterState.employee;
+      var matchesMode=filterState.mode!=='attended'||details.attended;
+      var show=matchesDate&&matchesEmployee&&matchesMode;
+      row.hidden=!show;
+      if(show)visible+=1;
+    });
+    var count=panel.querySelector('[data-attendance-filter-count]');
+    if(count)count.textContent='Showing '+visible+' of '+rows.length+' attendance records';
+    var empty=panel.parentNode&&panel.parentNode.querySelector('[data-attendance-filter-empty]');
+    if(!empty&&table.parentNode){
+      empty=document.createElement('div');
+      empty.className='empty';
+      empty.dataset.attendanceFilterEmpty='1';
+      empty.textContent='No attendance records match these filters.';
+      table.parentNode.appendChild(empty);
+    }
+    if(empty)empty.hidden=visible!==0||rows.length===0;
+  }
+
+  function buildFilters(table){
+    var recordsPanel=table.closest('.panel');
+    var content=document.getElementById('content');
+    if(!recordsPanel||!content)return;
+    var existing=content.querySelector('[data-attendance-filters]');
+    if(existing)existing.remove();
+    var panel=document.createElement('section');
+    panel.className='panel';
+    panel.dataset.attendanceFilters='date-person-v1';
+    panel.innerHTML='<header class="panel-head"><div><h2>Attendance filters</h2><p class="muted">Filter the selected month by an exact date or employee. Use Attended only to show actual check-ins.</p></div><span class="muted" data-attendance-filter-count></span></header><div class="panel-body"><div class="form-grid"><label class="field"><span>Date</span><input type="date" data-attendance-date></label><label class="field"><span>Employee</span><select data-attendance-employee></select></label><label class="field"><span>Records</span><select data-attendance-mode><option value="all">All attendance records</option><option value="attended">Attended only</option></select></label><div class="field"><span>&nbsp;</span><button class="ghost" type="button" data-attendance-reset>Clear filters</button></div></div></div>';
+    recordsPanel.parentNode.insertBefore(panel,recordsPanel);
+
+    var bounds=monthBounds();
+    var dateInput=panel.querySelector('[data-attendance-date]');
+    dateInput.min=bounds.min;dateInput.max=bounds.max;
+    if(filterState.date&&bounds.min&&filterState.date>=bounds.min&&filterState.date<=bounds.max)dateInput.value=filterState.date;
+    else{filterState.date='';dateInput.value='';}
+
+    var employeeSelect=panel.querySelector('[data-attendance-employee]');
+    fillEmployees(employeeSelect,rowsFor(table));
+    var modeSelect=panel.querySelector('[data-attendance-mode]');
+    modeSelect.value=filterState.mode;
+
+    dateInput.addEventListener('change',function(){filterState.date=dateInput.value;applyFilters(table,panel);});
+    employeeSelect.addEventListener('change',function(){filterState.employee=employeeSelect.value;applyFilters(table,panel);});
+    modeSelect.addEventListener('change',function(){filterState.mode=modeSelect.value;applyFilters(table,panel);});
+    panel.querySelector('[data-attendance-reset]').addEventListener('click',function(){
+      filterState={date:'',employee:'',mode:'all'};
+      dateInput.value='';employeeSelect.value='';modeSelect.value='all';applyFilters(table,panel);
+    });
+    currentTable=table;
+    applyFilters(table,panel);
+  }
+
+  function inspect(){
+    if(!attendanceOpen()){currentTable=null;return;}
+    var table=findAttendanceTable();
+    if(!table)return;
+    var panel=document.querySelector('[data-attendance-filters]');
+    if(table!==currentTable||!panel||!panel.isConnected)buildFilters(table);
+  }
+
+  var observer=new MutationObserver(function(){
+    window.clearTimeout(timer);
+    timer=window.setTimeout(inspect,50);
+  });
+  observer.observe(document.documentElement,{childList:true,subtree:true});
+  document.addEventListener('change',function(event){
+    if(event.target&&event.target.id==='activeMonth'){
+      filterState.date='';currentTable=null;window.setTimeout(inspect,80);
+    }
+  });
+  window.setTimeout(inspect,0);
+})();`;
+        return '<scr' + 'ipt data-adscope-attendance-filters="date-person-v1">' + source + '</scr' + 'ipt>';
+      }
+
       async function loadPortal() {
         loadingView();
         const controller = new AbortController();
@@ -47,9 +196,11 @@
             return await new Response(new Blob([bytes]).stream().pipeThrough(new DecompressionStream('gzip'))).text();
           })();
           const html = await Promise.race([request, deadline]);
+          const filterPatch = attendanceFilterPatch();
+          const patchedHtml = /<\/body>/i.test(html) ? html.replace(/<\/body>/i, `${filterPatch}</body>`) : `${html}${filterPatch}`;
           window.clearTimeout(timer);
           document.open();
-          document.write(html);
+          document.write(patchedHtml);
           document.close();
         } catch (_) {
           window.clearTimeout(timer);
