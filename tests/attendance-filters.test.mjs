@@ -13,10 +13,10 @@ function filterScript() {
 }
 
 test('Admin loader injects attendance filters only into the real Admin bundle', () => {
-  assert.match(source, /data-adscope-attendance-filters="date-person-v1"/)
-  assert.match(source, /shouldInjectFilters=\/id\\s\*=\\s\*\["'\]app\["'\]\/i\.test\(html\)/)
-  assert.match(source, /shouldInjectFilters\?attendanceFilterPatch\(\):''/)
-  assert.match(source, /html\.replace\(\/<\\\/body>\/i,filterPatch\+'<\/body>'\)/)
+  assert.ok(source.includes('data-adscope-attendance-filters="date-person-v1"'))
+  assert.ok(source.includes('const shouldInjectFilters=/id\\s*=\\s*["\']app["\']/i.test(html);'))
+  assert.ok(source.includes("const filterPatch=shouldInjectFilters?attendanceFilterPatch():'';"))
+  assert.ok(source.includes("html.replace(/<\\/body>/i,filterPatch+'</body>')"))
 })
 
 test('Attendance filters provide exact date, employee and attended-only controls', () => {
