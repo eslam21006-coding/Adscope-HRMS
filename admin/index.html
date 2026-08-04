@@ -12,7 +12,7 @@
   <script>
   (()=>{
     const bundleUrl='https://fazvuuwgahuxacvgyslf.supabase.co/functions/v1/hrms-static-assets?bundle=admin';
-    const timeoutMs=15000;
+    const timeoutMs = 15000;
     const loadingView=()=>{document.body.innerHTML='<div class="boot"><strong>Loading Adscope HRMS…</strong><p>Securely preparing your workspace.</p></div>'};
     const errorView=()=>{document.body.innerHTML='<div class="boot" role="alert"><strong>Unable to open the portal</strong><p>We could not prepare your secure workspace. Check your connection and try again.</p><button id="retryPortal" type="button">Retry</button></div>';document.getElementById('retryPortal').addEventListener('click',loadPortal)};
 
