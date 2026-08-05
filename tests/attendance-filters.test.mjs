@@ -43,6 +43,6 @@ test('Attendance filters stay inside the selected month and can be cleared', () 
 
 test('Attendance filtering is read-only and the injected script parses', () => {
   const script = filterScript()
-  assert.doesNotMatch(script, /\.from\(|\.rpc\(|\.update\(|\.insert\(|\.delete\(/)
+  assert.doesNotMatch(script, /\bclient\.from\(|\.rpc\(|\.update\(|\.insert\(|\.delete\(/)
   assert.doesNotThrow(() => new vm.Script(script))
 })

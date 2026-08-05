@@ -38,6 +38,33 @@ var observer=new MutationObserver(function(){window.clearTimeout(timer);timer=wi
       return '<scr'+'ipt data-adscope-attendance-filters="date-person-v1">'+source+'</scr'+'ipt>';
     }
 
+    function displaySettingsPatch(){
+      const source=`(function(){
+'use strict';
+if(window.__ADSCOPE_DISPLAY_SETTINGS__)return;
+window.__ADSCOPE_DISPLAY_SETTINGS__=true;
+var cfg=window.ADSCOPE_CONFIG;
+if(!cfg||!window.supabase)return;
+var client=window.supabase.createClient(cfg.supabaseUrl,cfg.supabasePublishableKey,{auth:{persistSession:true,autoRefreshToken:true,detectSessionInUrl:false}});
+var state={organizationId:null,role:null,timeFormat:'12',timezone:cfg.timezone||'Africa/Cairo',loaded:false};
+var inspectTimer=null;
+function notify(message,type){var root=document.getElementById('toastRoot')||document.body;var node=document.createElement('div');node.className='toast '+(type||'success');node.setAttribute('role','status');node.textContent=message;if(root===document.body)node.style.cssText='position:fixed;right:18px;bottom:18px;z-index:2147483647;padding:12px 15px;border-radius:10px;background:#102a44;color:#fff;border:1px solid #315a7d;font:14px Arial,sans-serif;box-shadow:0 12px 30px #0007';root.appendChild(node);window.setTimeout(function(){node.remove();},4500);}
+function clock(hour,minute,second,meridiem){var h=Number(hour);if(meridiem){var marker=String(meridiem).toUpperCase();if(marker==='PM'&&h<12)h+=12;if(marker==='AM'&&h===12)h=0;}var suffix=second===undefined?'':':'+second;if(state.timeFormat==='24')return String(h).padStart(2,'0')+':'+minute+suffix;var display=h%12||12;return String(display)+':'+minute+suffix+' '+(h>=12?'PM':'AM');}
+function formatText(value){var text=String(value||'');if(text.indexOf(':')<0)return text;var output=text.replace(/(^|[^A-Za-z0-9])((?:0?[1-9]|1[0-2])):([0-5]\\d)(?::([0-5]\\d))?\\s*(AM|PM)\\b/gi,function(_,prefix,hour,minute,second,meridiem){return prefix+clock(hour,minute,second,meridiem);});return output.replace(/(^|[^A-Za-z0-9])([01]?\\d|2[0-3]):([0-5]\\d)(?::([0-5]\\d))?(?!\\s*(?:AM|PM)\\b)/g,function(_,prefix,hour,minute,second){return prefix+clock(hour,minute,second);});}
+function skipNode(node){var parent=node&&node.parentElement;return !parent||Boolean(parent.closest('script,style,textarea,input,select,option,[data-adscope-time-format-settings]'));}
+function formatRoot(root){if(!state.loaded||!root)return;var walker=document.createTreeWalker(root,NodeFilter.SHOW_TEXT);var nodes=[];while(walker.nextNode())nodes.push(walker.currentNode);nodes.forEach(function(node){if(skipNode(node))return;var formatted=formatText(node.nodeValue);if(formatted!==node.nodeValue)node.nodeValue=formatted;});}
+function hideCodeColumns(){if(!settingsOpen())return;document.querySelectorAll('#content table.data-table').forEach(function(table){var head=table.tHead&&table.tHead.rows&&table.tHead.rows[0];if(!head)return;Array.from(head.cells).forEach(function(cell,index){if(cell.textContent.trim().toLowerCase()!=='code')return;Array.from(table.rows).forEach(function(row){if(row.cells[index])row.cells[index].hidden=true;});});});}
+function settingsOpen(){var heading=document.querySelector('.topbar h1');return Boolean(heading&&heading.textContent.trim()==='Settings'&&document.getElementById('content'));}
+function companyTabOpen(){var active=document.querySelector('[data-settings-tab].active');if(active)return active.dataset.settingsTab==='company';var content=document.getElementById('content');return Boolean(content&&Array.from(content.querySelectorAll('h2,h3')).some(function(node){return /company/i.test(node.textContent||'');}));}
+function renderSettings(){if(!state.loaded||state.role!=='owner'||!settingsOpen()||!companyTabOpen())return;var content=document.getElementById('content');if(!content||content.querySelector('[data-adscope-time-format-settings]'))return;var panel=document.createElement('section');panel.className='panel';panel.dataset.adscopeTimeFormatSettings='time-format-v1';panel.innerHTML='<header class="panel-head"><div><h2>Time display</h2><p class="muted">Choose how times appear across the Admin Dashboard and Employee Portal.</p></div></header><div class="panel-body"><form data-time-format-form><div class="form-grid"><label class="field"><span>Time format</span><select name="time_format"><option value="12">12-hour (9:30 AM)</option><option value="24">24-hour (09:30)</option></select></label><div class="field"><span>&nbsp;</span><button class="primary" type="submit">Save time format</button></div></div><p class="muted">This changes display only. Stored attendance timestamps remain unchanged.</p></form></div>';content.appendChild(panel);var select=panel.querySelector('[name="time_format"]');select.value=state.timeFormat;panel.querySelector('[data-time-format-form]').addEventListener('submit',saveSettings);}
+async function saveSettings(event){event.preventDefault();var form=event.currentTarget;var select=form.elements.time_format;var value=String(select.value||'');if(value!=='12'&&value!=='24')return notify('Select either 12-hour or 24-hour time.','error');var button=form.querySelector('[type="submit"]');button.disabled=true;button.textContent='Saving…';try{var result=await client.from('organizations').update({time_format:value,updated_at:new Date().toISOString()}).eq('id',state.organizationId).select('time_format').single();if(result.error)throw result.error;state.timeFormat=result.data.time_format;formatRoot(document.body);notify('Time format saved.','success');}catch(error){notify('Time format could not be saved. Try again.','error');}finally{button.disabled=false;button.textContent='Save time format';}}
+async function loadSettings(){state.loaded=false;var sessionResult=await client.auth.getSession();var session=sessionResult.data&&sessionResult.data.session;if(!session)return;var membershipResult=await client.from('organization_memberships').select('organization_id,role').eq('user_id',session.user.id).eq('is_active',true).limit(1).maybeSingle();if(membershipResult.error)throw membershipResult.error;if(!membershipResult.data)return;var organizationResult=await client.from('organizations').select('timezone,time_format').eq('id',membershipResult.data.organization_id).single();if(organizationResult.error)throw organizationResult.error;state.organizationId=membershipResult.data.organization_id;state.role=membershipResult.data.role;state.timeFormat=organizationResult.data.time_format==='24'?'24':'12';state.timezone=organizationResult.data.timezone||state.timezone;state.loaded=true;inspect();}
+function inspect(){hideCodeColumns();formatRoot(document.body);renderSettings();}
+var observer=new MutationObserver(function(){window.clearTimeout(inspectTimer);inspectTimer=window.setTimeout(inspect,40);});observer.observe(document.documentElement,{childList:true,subtree:true,characterData:true});client.auth.onAuthStateChange(function(){window.setTimeout(function(){loadSettings().catch(function(){});},0);});loadSettings().catch(function(){});window.setTimeout(inspect,0);
+})();`;
+      return '<scr'+'ipt data-adscope-display-settings="time-format-v1">'+source+'</scr'+'ipt>';
+    }
+
     async function loadPortal(){
       loadingView();
       const controller=new AbortController();
@@ -48,7 +75,9 @@ var observer=new MutationObserver(function(){window.clearTimeout(timer);timer=wi
         const html=await Promise.race([request,deadline]);
         const shouldInjectFilters=/id\s*=\s*["']app["']/i.test(html);
         const filterPatch=shouldInjectFilters?attendanceFilterPatch():'';
-        const patchedHtml=!filterPatch?html:(/<\/body>/i.test(html)?html.replace(/<\/body>/i,filterPatch+'</body>'):html+filterPatch);
+        const filterPatchedHtml=!filterPatch?html:(/<\/body>/i.test(html)?html.replace(/<\/body>/i,filterPatch+'</body>'):html+filterPatch);
+        const displayPatch=shouldInjectFilters?displaySettingsPatch():'';
+        const patchedHtml=!displayPatch?filterPatchedHtml:(/<\/body>/i.test(filterPatchedHtml)?filterPatchedHtml.replace(/<\/body>/i,displayPatch+'</body>'):filterPatchedHtml+displayPatch);
         window.clearTimeout(timer);
         document.open();document.write(patchedHtml);document.close();
       }catch(_){window.clearTimeout(timer);errorView();}
