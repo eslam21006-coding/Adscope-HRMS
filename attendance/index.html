@@ -25,6 +25,26 @@
         document.getElementById('retryPortal').addEventListener('click', loadPortal);
       }
 
+      function employeeTimeFormatPatch() {
+        const source=`(function(){
+'use strict';
+if(window.__ADSCOPE_EMPLOYEE_TIME_FORMAT__)return;
+window.__ADSCOPE_EMPLOYEE_TIME_FORMAT__=true;
+var cfg=window.ADSCOPE_CONFIG;
+if(!cfg||!window.supabase)return;
+var client=window.supabase.createClient(cfg.supabaseUrl,cfg.supabasePublishableKey,{auth:{persistSession:true,autoRefreshToken:true,detectSessionInUrl:false}});
+var state={timeFormat:'12',loaded:false};
+var timer=null;
+function clock(hour,minute,second,meridiem){var h=Number(hour);if(meridiem){var marker=String(meridiem).toUpperCase();if(marker==='PM'&&h<12)h+=12;if(marker==='AM'&&h===12)h=0;}var suffix=second===undefined?'':':'+second;if(state.timeFormat==='24')return String(h).padStart(2,'0')+':'+minute+suffix;var display=h%12||12;return String(display)+':'+minute+suffix+' '+(h>=12?'PM':'AM');}
+function formatText(value){var text=String(value||'');if(text.indexOf(':')<0)return text;var output=text.replace(/(^|[^A-Za-z0-9])((?:0?[1-9]|1[0-2])):([0-5]\\d)(?::([0-5]\\d))?\\s*(AM|PM)\\b/gi,function(_,prefix,hour,minute,second,meridiem){return prefix+clock(hour,minute,second,meridiem);});return output.replace(/(^|[^A-Za-z0-9])([01]?\\d|2[0-3]):([0-5]\\d)(?::([0-5]\\d))?(?!\\s*(?:AM|PM)\\b)/g,function(_,prefix,hour,minute,second){return prefix+clock(hour,minute,second);});}
+function skipNode(node){var parent=node&&node.parentElement;return !parent||Boolean(parent.closest('script,style,textarea,input,select,option'));}
+function formatPortal(){if(!state.loaded)return;var root=document.getElementById('portalApp')||document.body;var walker=document.createTreeWalker(root,NodeFilter.SHOW_TEXT);var nodes=[];while(walker.nextNode())nodes.push(walker.currentNode);nodes.forEach(function(node){if(skipNode(node))return;var formatted=formatText(node.nodeValue);if(formatted!==node.nodeValue)node.nodeValue=formatted;});}
+async function loadFormat(){state.loaded=false;var sessionResult=await client.auth.getSession();var session=sessionResult.data&&sessionResult.data.session;if(!session)return;var membershipResult=await client.from('organization_memberships').select('organization_id').eq('user_id',session.user.id).eq('is_active',true).limit(1).maybeSingle();if(membershipResult.error)throw membershipResult.error;if(!membershipResult.data)return;var organizationResult=await client.from('organizations').select('time_format').eq('id',membershipResult.data.organization_id).single();if(organizationResult.error)throw organizationResult.error;state.timeFormat=organizationResult.data.time_format==='24'?'24':'12';state.loaded=true;formatPortal();}
+var observer=new MutationObserver(function(){window.clearTimeout(timer);timer=window.setTimeout(formatPortal,25);});observer.observe(document.documentElement,{childList:true,subtree:true,characterData:true});client.auth.onAuthStateChange(function(){window.setTimeout(function(){loadFormat().catch(function(){});},0);});loadFormat().catch(function(){});window.setTimeout(formatPortal,0);
+})();`;
+        return '<scr'+'ipt data-adscope-employee-time-format="time-format-v1">'+source+'</scr'+'ipt>';
+      }
+
       async function loadPortal() {
         loadingView();
         const controller = new AbortController();
@@ -47,9 +67,12 @@
             return await new Response(new Blob([bytes]).stream().pipeThrough(new DecompressionStream('gzip'))).text();
           })();
           const html = await Promise.race([request, deadline]);
+          const shouldInjectTimeFormat=/id\s*=\s*["']portalApp["']/i.test(html);
+          const timeFormatPatch=shouldInjectTimeFormat?employeeTimeFormatPatch():'';
+          const patchedHtml=!timeFormatPatch?html:(/<\/body>/i.test(html)?html.replace(/<\/body>/i,timeFormatPatch+'</body>'):html+timeFormatPatch);
           window.clearTimeout(timer);
           document.open();
-          document.write(html);
+          document.write(patchedHtml);
           document.close();
         } catch (_) {
           window.clearTimeout(timer);
