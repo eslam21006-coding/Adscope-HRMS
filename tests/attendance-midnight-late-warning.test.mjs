@@ -41,10 +41,17 @@ test('late full-time check-in creates an employee warning without becoming disci
   assert.doesNotMatch(migration, /insert into public\.violations/i)
 })
 
+test('portal keeps only one live clock interval after rerenders', () => {
+  assert.match(portal, /events=\[\],clockTimer=null/)
+  assert.match(portal, /if\(clockTimer\)clearInterval\(clockTimer\);clockTimer=setInterval\(updateClock,1000\)/)
+})
+
 test('live loader patches the compiled attendance bundle and surfaces warnings', () => {
   assert.match(loader, /patchAttendanceBundle/)
   assert.match(loader, /select\('event_type,occurred_at,attendance_date'\)/)
   assert.match(loader, /break:\['BREAK_END','CHECK_OUT'\]/)
+  assert.match(loader, /clockTimer=null/)
+  assert.match(loader, /clearInterval\(clockTimer\)/)
   assert.match(loader, /review_warning/)
   assert.match(loader, /late_warning/)
 })
