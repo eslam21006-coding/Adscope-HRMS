@@ -20,10 +20,13 @@ declare
   new_event public.attendance_events%rowtype;
   implicit_break_event public.attendance_events%rowtype;
   day_row public.attendance_days%rowtype;
+  stale_day record;
+  stale_review_count integer := 0;
   allowed boolean := false;
   attendance_required_now boolean;
   event_ts timestamptz;
   late_warning_text text;
+  review_warning_text text;
 begin
   if uid is null then raise exception 'Authentication required'; end if;
 
@@ -55,12 +58,66 @@ begin
       'idempotent', true,
       'event', to_jsonb(existing_event),
       'attendance_day', to_jsonb(day_row),
-      'late_warning', null
+      'late_warning', null,
+      'review_warning', null
     );
   end if;
 
   today_date := app_private.organization_local_date(e.organization_id, clock_timestamp());
   local_date := today_date;
+
+  for stale_day in
+    update public.attendance_days ad
+       set status = 'missing_checkout',
+           status_override = 'missing_checkout',
+           worked_minutes = 0,
+           overtime_minutes = 0,
+           approved_overtime_minutes = 0,
+           notes = concat_ws(' · ', ad.notes, 'Open shift exceeded one overnight rollover. Owner attendance review required.'),
+           updated_at = now()
+     where ad.employee_id = e.id
+       and ad.check_in_at is not null
+       and ad.check_out_at is null
+       and ad.attendance_date < today_date - 1
+       and not coalesce(ad.is_test_record, false)
+       and coalesce(ad.status_override, ad.status) <> 'missing_checkout'
+    returning ad.id, ad.attendance_date
+  loop
+    stale_review_count := stale_review_count + 1;
+
+    perform app_private.notify_owners(
+      e.organization_id,
+      'attendance_review_required',
+      'Attendance Review Needed',
+      format('%s has a missing checkout from %s. Review the attendance record before its hours become final.', e.full_name, stale_day.attendance_date),
+      'attendance_day',
+      stale_day.id
+    );
+
+    perform app_private.write_audit(
+      e.organization_id,
+      'MISSING_CHECKOUT_REVIEW_REQUIRED',
+      'attendance_day',
+      stale_day.id::text,
+      null,
+      jsonb_build_object(
+        'employee_id', e.id,
+        'attendance_date', stale_day.attendance_date,
+        'status', 'missing_checkout',
+        'provisional_worked_minutes', 0,
+        'provisional_overtime_minutes', 0
+      ),
+      'Open attendance session exceeded one overnight rollover and was moved to Owner review without inventing a checkout time.',
+      p_idempotency_key
+    );
+  end loop;
+
+  if stale_review_count > 0 then
+    review_warning_text := case
+      when stale_review_count = 1 then 'A previous missing checkout was moved to Owner review. Its hours will stay provisional until corrected.'
+      else format('%s previous missing checkouts were moved to Owner review. Their hours will stay provisional until corrected.', stale_review_count)
+    end;
+  end if;
 
   if p_event_type = 'CHECK_IN' then
     select ad.attendance_date into open_date
@@ -68,7 +125,9 @@ begin
     where ad.employee_id = e.id
       and ad.check_in_at is not null
       and ad.check_out_at is null
-      and ad.attendance_date between today_date - 1 and today_date - 1
+      and ad.attendance_date = today_date - 1
+      and not coalesce(ad.is_test_record, false)
+      and coalesce(ad.status_override, ad.status) <> 'missing_checkout'
     order by ad.attendance_date desc
     limit 1;
 
@@ -82,6 +141,8 @@ begin
       and ad.check_in_at is not null
       and ad.check_out_at is null
       and ad.attendance_date between today_date - 1 and today_date
+      and not coalesce(ad.is_test_record, false)
+      and coalesce(ad.status_override, ad.status) <> 'missing_checkout'
     order by ad.attendance_date desc
     limit 1;
 
@@ -215,10 +276,11 @@ begin
     'idempotent', false,
     'event', to_jsonb(new_event),
     'attendance_day', to_jsonb(day_row),
-    'late_warning', late_warning_text
+    'late_warning', late_warning_text,
+    'review_warning', review_warning_text
   );
 end;
 $function$;
 
 comment on function public.record_attendance_event(public.attendance_event_type, uuid, text) is
-  'Records employee attendance events, preserves an open prior-day shift across midnight, automatically ends an active break on checkout, and notifies full-time employees when a check-in exceeds the allowed grace period.';
+  'Records employee attendance events, carries one overnight shift across midnight, automatically ends an active break on checkout, moves older missing checkouts to Owner review with zero provisional hours, and notifies full-time employees when a check-in exceeds the allowed grace period.';
