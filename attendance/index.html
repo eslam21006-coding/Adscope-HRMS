@@ -32,7 +32,7 @@
         patched = patched.replace("break:['BREAK_END']", "break:['BREAK_END','CHECK_OUT']");
         patched = patched.replace('<span>Date</span><strong>${esc(localDate())}</strong>', '<span>Shift date</span><strong>${esc(profile.attendance_date||localDate())}</strong>');
         patched = patched.replace('<div class="events"><strong>Today’s events</strong>', '<div class="events"><strong>Current shift events</strong>');
-        patched = patched.replace("toast(`${label(type)} recorded.`);await load();render()", "toast(data?.late_warning||`${label(type)} recorded.`);await load();render()");
+        patched = patched.replace("toast(`${label(type)} recorded.`);await load();render()", "const warnings=[data?.review_warning,data?.late_warning].filter(Boolean);toast(warnings.join(' ')||`${label(type)} recorded.`);await load();render()");
         return patched;
       }
 
