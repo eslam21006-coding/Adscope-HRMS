@@ -6,7 +6,7 @@ const portal = readFileSync(new URL('../attendance/portal.js', import.meta.url),
 const loader = readFileSync(new URL('../attendance/index.html', import.meta.url), 'utf8')
 const migration = readFileSync(new URL('../supabase/migrations/20260810173000_midnight_attendance_and_late_warning.sql', import.meta.url), 'utf8')
 
-test('employee portal keeps an open prior-day shift visible after midnight', () => {
+test('employee portal keeps a one-night open shift visible after midnight', () => {
   assert.match(portal, /gte\('attendance_date',previous\)\.lte\('attendance_date',today\)/)
   assert.match(portal, /activeDate=dates\.find/)
   assert.match(portal, /profile\.attendance_date=activeDate\|\|today/)
@@ -21,8 +21,14 @@ test('employee can check out directly while on break', () => {
   assert.match(migration, /Break automatically ended when the employee checked out/)
 })
 
-test('server prevents a second check-in while yesterday shift is still open', () => {
-  assert.match(migration, /p_event_type = 'CHECK_IN'[\s\S]*check_in_at is not null[\s\S]*check_out_at is null/)
+test('older forgotten checkouts are moved to Owner review before a new shift', () => {
+  assert.match(migration, /attendance_date < today_date - 1/)
+  assert.match(migration, /status = 'missing_checkout'/)
+  assert.match(migration, /worked_minutes = 0/)
+  assert.match(migration, /overtime_minutes = 0/)
+  assert.match(migration, /app_private\.notify_owners[\s\S]*attendance_review_required/)
+  assert.match(migration, /MISSING_CHECKOUT_REVIEW_REQUIRED/)
+  assert.match(migration, /attendance_date = today_date - 1/)
   assert.match(migration, /You still have an open shift from %\. Check out before starting a new shift/)
 })
 
@@ -30,14 +36,15 @@ test('late full-time check-in creates an employee warning without becoming disci
   assert.match(migration, /e\.employment_type = 'full_time'/)
   assert.match(migration, /raw_late_minutes, 0\) > coalesce\(day_row\.grace_minutes, 0\)/)
   assert.match(migration, /late_approval, 'none'::public\.approval_status\) <> 'approved'/)
-  assert.match(migration, /app_private\.notify_employee/[\s\S]*late_check_in_warning/[\s\S]*not a disciplinary warning/)
+  assert.match(migration, /app_private\.notify_employee[\s\S]*late_check_in_warning[\s\S]*not a disciplinary warning/)
   assert.match(migration, /LATE_CHECK_IN_WARNING/)
   assert.doesNotMatch(migration, /insert into public\.violations/i)
 })
 
-test('live loader patches the currently compiled attendance bundle', () => {
+test('live loader patches the compiled attendance bundle and surfaces warnings', () => {
   assert.match(loader, /patchAttendanceBundle/)
   assert.match(loader, /select\('event_type,occurred_at,attendance_date'\)/)
   assert.match(loader, /break:\['BREAK_END','CHECK_OUT'\]/)
-  assert.match(loader, /data\?\.late_warning/)
+  assert.match(loader, /review_warning/)
+  assert.match(loader, /late_warning/)
 })
