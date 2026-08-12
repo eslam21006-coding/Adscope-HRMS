@@ -10,7 +10,7 @@ const migration = [
   '20260812101500_quarantine_august_system_issue.sql',
 ].map(name => fs.readFileSync(new URL('../supabase/migrations/' + name, import.meta.url), 'utf8')).join('\n');
 const portal = fs.readFileSync(new URL('../attendance/portal.js', import.meta.url), 'utf8');
-const loader = fs.readFileSync(new URL('../attendance/index.html', import.meta.url), 'utf8');
+const page = fs.readFileSync(new URL('../attendance/index.html', import.meta.url), 'utf8');
 const edge = fs.readFileSync(new URL('../supabase/functions/attendance-event/index.ts', import.meta.url), 'utf8');
 
 test('attendance uses explicit session lifecycle and one open session per employee', () => {
@@ -74,8 +74,10 @@ test('edge function returns readable structured attendance errors', () => {
   assert.match(portal, /error\.context/);
 });
 
-test('attendance loader no longer applies calendar-date compatibility rewriting', () => {
-  assert.doesNotMatch(loader, /patchAttendanceBundle/);
-  assert.doesNotMatch(loader, /previousDate/);
-  assert.match(loader, /hrms-static-assets\?bundle=attendance/);
+test('employee attendance is served directly from source control', () => {
+  assert.match(page, /<script src="\/config\.js"><\/script>/);
+  assert.match(page, /<script src="\/attendance\/portal\.js"><\/script>/);
+  assert.doesNotMatch(page, /hrms-static-assets\?bundle=attendance/);
+  assert.doesNotMatch(page, /DecompressionStream/);
+  assert.doesNotMatch(page, /patchAttendanceBundle/);
 });
