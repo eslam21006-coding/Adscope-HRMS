@@ -12,6 +12,8 @@ const migration = [
 const portal = fs.readFileSync(new URL('../attendance/portal.js', import.meta.url), 'utf8');
 const page = fs.readFileSync(new URL('../attendance/index.html', import.meta.url), 'utf8');
 const edge = fs.readFileSync(new URL('../supabase/functions/attendance-event/index.ts', import.meta.url), 'utf8');
+const originalFullPortalBundle = fs.readFileSync(new URL('../supabase/migrations/20260812102000_compiled_attendance_session_portal.sql', import.meta.url), 'utf8');
+const recoveryFullPortalBundle = fs.readFileSync(new URL('../supabase/migrations/20260812183000_restore_full_employee_portal_bundle.sql', import.meta.url), 'utf8');
 
 test('attendance uses explicit session lifecycle and one open session per employee', () => {
   assert.match(migration, /session_state in \('not_started','open','closed','needs_review'\)/);
@@ -74,10 +76,21 @@ test('edge function returns readable structured attendance errors', () => {
   assert.match(portal, /error\.context/);
 });
 
-test('employee attendance is served directly from source control', () => {
-  assert.match(page, /<script src="\/config\.js"><\/script>/);
-  assert.match(page, /<script src="\/attendance\/portal\.js"><\/script>/);
-  assert.doesNotMatch(page, /hrms-static-assets\?bundle=attendance/);
-  assert.doesNotMatch(page, /DecompressionStream/);
+test('employee URL loads the full Employee Portal workspace bundle, not the attendance-only source page', () => {
+  assert.match(page, /hrms-static-assets\?bundle=attendance/);
+  assert.match(page, /DecompressionStream/);
+  assert.match(page, /assertFullEmployeeWorkspace/);
+  assert.match(page, /hasNavigation/);
+  assert.match(page, /hasWorkspaceLayout/);
+  assert.match(page, /hasEmployeeFeatures/);
+  assert.match(page, /No partial attendance-only portal was loaded/);
+  assert.doesNotMatch(page, /<script src="\/attendance\/portal\.js"><\/script>/);
   assert.doesNotMatch(page, /patchAttendanceBundle/);
+});
+
+test('recovery migration restores the exact deterministic full portal bundle', () => {
+  assert.equal(recoveryFullPortalBundle, originalFullPortalBundle);
+  assert.match(recoveryFullPortalBundle, /delete from app_private\.frontend_bundle_parts where bundle='attendance'/);
+  assert.match(recoveryFullPortalBundle, /length\(v_payload\) <> 16992/);
+  assert.equal((recoveryFullPortalBundle.match(/values \('attendance',/g) || []).length, 3);
 });
