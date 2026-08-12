@@ -161,6 +161,20 @@ begin
     update public.attendance_days
     set session_state='closed',closed_at=event_ts,updated_at=now()
     where id=day_id;
+
+    select * into day_row from public.attendance_days where id=day_id;
+    if app_private.attendance_session_review_after(day_row.organization_id,day_row.attendance_date,day_row.scheduled_start,day_row.scheduled_end,day_row.check_in_at) is not null
+       and event_ts > app_private.attendance_session_review_after(day_row.organization_id,day_row.attendance_date,day_row.scheduled_start,day_row.scheduled_end,day_row.check_in_at)
+    then
+      update public.attendance_days
+      set session_state='needs_review',requires_owner_review=true,excluded_from_totals=true,
+          review_reason='Extended checkout: checkout was recorded beyond the normal shift-end plus six-hour window. Confirm the extended shift before finalizing.',
+          updated_at=now()
+      where id=day_id;
+      perform app_private.recompute_attendance_day(day_id);
+      perform app_private.notify_owners(e.organization_id,'attendance_review_required','Extended Shift Review Needed',format('%s checked out after the normal extended-shift window for %s. Raw checkout was preserved and totals are paused until Owner review.',e.full_name,local_date),'attendance_day',day_id);
+      review_warning_text:=concat_ws(' ',review_warning_text,'Your checkout was recorded, but this unusually long shift needs Owner review before its hours become final.');
+    end if;
   end if;
 
   select * into day_row from public.attendance_days where id=day_id;
@@ -192,4 +206,4 @@ end;
 $function$;
 
 comment on function public.record_attendance_event(public.attendance_event_type,uuid,text) is
-  'Records attendance against one explicit open session, expires stale sessions by scheduled end plus six hours with an eighteen-hour hard cap, and never attaches a new-day action to an expired shift.';
+  'Records attendance against one explicit open session. Checkout after shift end plus six hours is preserved and moved to Owner review; an open session hard-expires eighteen hours after check-in.';
