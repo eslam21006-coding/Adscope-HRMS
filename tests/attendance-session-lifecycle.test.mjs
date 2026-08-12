@@ -4,6 +4,7 @@ import fs from 'node:fs';
 
 const migration = [
   '20260812100000_attendance_session_schema.sql',
+  '20260812100200_attendance_soft_review_hard_expiry.sql',
   '20260812100500_attendance_session_actions.sql',
   '20260812101000_attendance_review_and_totals.sql',
   '20260812101500_quarantine_august_system_issue.sql',
@@ -18,10 +19,11 @@ test('attendance uses explicit session lifecycle and one open session per employ
   assert.match(migration, /where session_state='open'/);
 });
 
-test('session expiry is bounded by scheduled end plus six hours and an eighteen-hour hard cap', () => {
+test('session uses a six-hour soft review threshold and an eighteen-hour hard expiry', () => {
   assert.match(migration, /p_check_in_at \+ interval '18 hours'/);
-  assert.match(migration, /v_scheduled_cap := v_scheduled_cap \+ interval '6 hours'/);
-  assert.match(migration, /return least\(v_scheduled_cap, v_hard_cap\)/);
+  assert.match(migration, /return v_review_after\+interval '6 hours'/);
+  assert.match(migration, /Extended checkout: checkout was recorded beyond the normal shift-end plus six-hour window/);
+  assert.match(migration, /Your checkout was recorded, but this unusually long shift needs Owner review/);
 });
 
 test('expired shifts become review records and stop blocking new days', () => {
