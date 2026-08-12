@@ -6,26 +6,74 @@
   <meta name="theme-color" content="#071629">
   <title>Adscope Employee Portal</title>
   <style>
-    :root{color-scheme:dark;--bg:#071629;--panel:#0d2038;--panel2:#102842;--line:#263a53;--text:#f7f9fc;--muted:#aebed0;--gold:#d2ad57;--danger:#e56565;--success:#61c58b}
-    *{box-sizing:border-box}body{margin:0;min-height:100vh;background:var(--bg);color:var(--text);font:15px/1.5 Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
-    button,input{font:inherit}.page{min-height:100vh;padding:24px;display:grid;place-items:center}.card{width:min(760px,100%);padding:28px;border:1px solid var(--line);border-radius:24px;background:var(--panel);box-shadow:0 24px 80px #0007}
-    .header,.brand,.status-card,.details,.event{display:flex;align-items:center}.header{justify-content:space-between;gap:18px}.brand{gap:12px}.mark{width:44px;height:44px;display:grid;place-items:center;border-radius:13px;background:var(--gold);color:var(--bg);font-size:22px;font-weight:900}.title{font-size:18px;font-weight:850}.sub,.detail span,.events p,.card>p{color:var(--muted)}
-    h1{margin:26px 0 8px;font-size:30px}.status-card{justify-content:space-between;gap:16px;margin:24px 0 18px;padding:18px 20px;border:1px solid var(--line);border-radius:18px;background:var(--panel2)}.status{text-transform:capitalize;font-size:26px;font-weight:900}.clock{color:var(--gold);font-weight:800;text-align:right}
-    .details{gap:12px;margin:16px 0;align-items:stretch}.detail{flex:1;padding:14px 16px;border:1px solid var(--line);border-radius:14px}.detail span,.detail strong{display:block}.detail strong{margin-top:4px;font-size:16px}
-    .stack{display:grid;gap:10px;margin:18px 0}button{border:0;border-radius:12px;padding:13px 16px;font-weight:850;cursor:pointer}.primary{background:var(--gold);color:var(--bg)}.secondary{background:#18334f;color:var(--text);border:1px solid #34516f}.danger{background:#522932;color:#fff;border:1px solid #8f4651}.ghost,.link{background:transparent;color:var(--text);padding:9px 11px}.link{color:var(--gold)}button:disabled{opacity:.6;cursor:wait}
-    .notice{margin:12px 0;padding:14px 16px;border:1px solid #7b6433;border-radius:14px;background:#2c281d;color:#f6e7bb}.notice strong{display:block;margin-bottom:3px}.notice p{margin:0;color:inherit}.notice.success{border-color:#356c50;background:#173526;color:#ccebd8}
-    .events{margin-top:22px}.events>strong{display:block;margin-bottom:8px}.event{justify-content:space-between;gap:16px;padding:11px 2px;border-bottom:1px solid var(--line)}
-    .field{display:grid;gap:6px;margin:14px 0}.field span{color:var(--muted)}.field input{width:100%;padding:13px 14px;border:1px solid #405570;border-radius:11px;background:#081a2d;color:#fff;outline:none}.field input:focus{border-color:var(--gold)}form .primary{width:100%;margin-top:8px}
-    .loading{min-height:100vh;display:grid;place-items:center;text-align:center;color:var(--muted)}.spinner{width:34px;height:34px;margin:0 auto 12px;border:3px solid #ffffff25;border-top-color:var(--gold);border-radius:50%;animation:spin .9s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}
-    #toastRoot{position:fixed;right:18px;bottom:18px;z-index:50;display:grid;gap:8px;max-width:min(430px,calc(100vw - 36px))}.toast{padding:13px 15px;border-radius:12px;background:#132c47;border:1px solid #3d5d7d;box-shadow:0 12px 40px #0008}
-    @media(max-width:620px){.page{padding:12px}.card{padding:20px;border-radius:18px}.details{display:grid}.status-card{align-items:flex-start;flex-direction:column}.clock{text-align:left;font-size:13px}.status{font-size:23px}}
+    body{margin:0;min-height:100vh;display:grid;place-items:center;background:#071629;color:#fff;font:16px Arial,sans-serif}.boot{max-width:560px;padding:28px;text-align:center}.boot strong{display:block;font-size:22px;margin-bottom:8px}.boot p{color:#b9c7d8;line-height:1.5}.boot button{margin-top:14px;padding:11px 18px;border:0;border-radius:10px;background:#c9a557;color:#071629;font:inherit;font-weight:800;cursor:pointer}
   </style>
-  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-  <script src="/config.js"></script>
 </head>
 <body>
-  <main id="portalApp"><div class="loading"><div><div class="spinner"></div>Loading attendance portal…</div></div></main>
-  <div id="toastRoot" aria-live="polite"></div>
-  <script src="/attendance/portal.js"></script>
+  <div class="boot"><strong>Loading Adscope HRMS…</strong><p>Securely preparing your employee workspace.</p></div>
+  <script>
+    (() => {
+      const bundleUrl = 'https://fazvuuwgahuxacvgyslf.supabase.co/functions/v1/hrms-static-assets?bundle=attendance';
+      const timeoutMs = 15000;
+
+      function loadingView() {
+        document.body.innerHTML = '<div class="boot"><strong>Loading Adscope HRMS…</strong><p>Securely preparing your employee workspace.</p></div>';
+      }
+
+      function errorView(message = 'We could not prepare your full employee workspace. No partial attendance-only portal was loaded. Check your connection and try again.') {
+        document.body.innerHTML = `<div class="boot" role="alert"><strong>Unable to open the Employee Portal</strong><p>${message}</p><button id="retryPortal" type="button">Retry</button></div>`;
+        document.getElementById('retryPortal').addEventListener('click', loadPortal);
+      }
+
+      function assertFullEmployeeWorkspace(html) {
+        const hasWorkspaceRoot = /id=["'](?:app|portalApp)["']/i.test(html);
+        const hasNavigation = /data-page=/i.test(html);
+        const hasWorkspaceLayout = /portal-shell|class=["'][^"']*\bshell\b|<nav\b|class=["'][^"']*\bsidebar\b/i.test(html);
+        const hasEmployeeFeatures = /requests|leave|advance|notification|profile/i.test(html);
+        if (!hasWorkspaceRoot || !hasNavigation || !hasWorkspaceLayout || !hasEmployeeFeatures) {
+          throw new Error('Employee Portal bundle is incomplete');
+        }
+        return html;
+      }
+
+      async function loadPortal() {
+        loadingView();
+        const controller = new AbortController();
+        let timer;
+        try {
+          const deadline = new Promise((_, reject) => {
+            timer = window.setTimeout(() => {
+              controller.abort();
+              reject(new Error('Portal initialization timed out'));
+            }, timeoutMs);
+          });
+          const request = (async () => {
+            if (!('DecompressionStream' in window)) throw new Error('This browser cannot open the secure Employee Portal.');
+            const response = await fetch(bundleUrl, { cache:'no-store', signal:controller.signal });
+            if (!response.ok) throw new Error('Employee Portal bundle is unavailable');
+            const encoded = await response.text();
+            const binary = atob(encoded);
+            const bytes = new Uint8Array(binary.length);
+            for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
+            const html = await new Response(new Blob([bytes]).stream().pipeThrough(new DecompressionStream('gzip'))).text();
+            return assertFullEmployeeWorkspace(html);
+          })();
+          const html = await Promise.race([request, deadline]);
+          window.clearTimeout(timer);
+          document.open();
+          document.write(html);
+          document.close();
+        } catch (error) {
+          window.clearTimeout(timer);
+          const message = error?.message === 'Employee Portal bundle is incomplete'
+            ? 'The Employee Portal package failed its integrity check. The system refused to replace your workspace with a partial attendance-only screen. Please retry.'
+            : 'We could not prepare your full employee workspace. Check your connection and try again.';
+          errorView(message);
+        }
+      }
+
+      loadPortal();
+    })();
+  </script>
 </body>
 </html>
