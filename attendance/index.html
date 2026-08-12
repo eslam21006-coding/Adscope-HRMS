@@ -25,20 +25,6 @@
         document.getElementById('retryPortal').addEventListener('click', loadPortal);
       }
 
-      function patchAttendanceBundle(html) {
-        // Temporary compatibility shim for the currently stored attendance bundle. Remove after the bundle is rebuilt from attendance/portal.js.
-        const oldEventsQuery = "const q=await client.from('attendance_events').select('event_type,occurred_at').eq('employee_id',employeeId).eq('attendance_date',localDate()).order('occurred_at');if(q.error)throw q.error;events=q.data||[];";
-        const newEventsQuery = "const today=localDate();const dateValue=new Date(today+'T00:00:00Z');dateValue.setUTCDate(dateValue.getUTCDate()-1);const previous=dateValue.toISOString().slice(0,10);const q=await client.from('attendance_events').select('event_type,occurred_at,attendance_date').eq('employee_id',employeeId).gte('attendance_date',previous).lte('attendance_date',today).order('occurred_at');if(q.error)throw q.error;const allEvents=q.data||[];const dates=[...new Set(allEvents.map(e=>e.attendance_date))].sort().reverse();const activeDate=dates.find(date=>{const dayEvents=allEvents.filter(e=>e.attendance_date===date);return dayEvents.some(e=>e.event_type==='CHECK_IN')&&!dayEvents.some(e=>e.event_type==='CHECK_OUT')});profile.attendance_date=activeDate||today;events=allEvents.filter(e=>e.attendance_date===profile.attendance_date);";
-        let patched = html.replace(oldEventsQuery, newEventsQuery);
-        patched = patched.replace('let session=null,profile=null,events=[];', 'let session=null,profile=null,events=[],clockTimer=null;');
-        patched = patched.replace("break:['BREAK_END']", "break:['BREAK_END','CHECK_OUT']");
-        patched = patched.replace('<span>Date</span><strong>${esc(localDate())}</strong>', '<span>Shift date</span><strong>${esc(profile.attendance_date||localDate())}</strong>');
-        patched = patched.replace('<div class="events"><strong>Today’s events</strong>', '<div class="events"><strong>Current shift events</strong>');
-        patched = patched.replace('updateClock();setInterval(updateClock,1000);', 'updateClock();if(clockTimer)clearInterval(clockTimer);clockTimer=setInterval(updateClock,1000);');
-        patched = patched.replace("toast(`${label(type)} recorded.`);await load();render()", "const warnings=[data?.review_warning,data?.late_warning].filter(Boolean);toast(warnings.join(' ')||`${label(type)} recorded.`);await load();render()");
-        return patched;
-      }
-
       async function loadPortal() {
         loadingView();
         const controller = new AbortController();
@@ -58,8 +44,7 @@
             const binary = atob(encoded);
             const bytes = new Uint8Array(binary.length);
             for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
-            const html = await new Response(new Blob([bytes]).stream().pipeThrough(new DecompressionStream('gzip'))).text();
-            return patchAttendanceBundle(html);
+            return await new Response(new Blob([bytes]).stream().pipeThrough(new DecompressionStream('gzip'))).text();
           })();
           const html = await Promise.race([request, deadline]);
           window.clearTimeout(timer);
