@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import vm from 'node:vm';
+import { gzipSync } from 'node:zlib';
 
 const migration = [
   '20260812100000_attendance_session_schema.sql',
@@ -12,6 +14,79 @@ const migration = [
 const portal = fs.readFileSync(new URL('../attendance/portal.js', import.meta.url), 'utf8');
 const page = fs.readFileSync(new URL('../attendance/index.html', import.meta.url), 'utf8');
 const edge = fs.readFileSync(new URL('../supabase/functions/attendance-event/index.ts', import.meta.url), 'utf8');
+const originalFullPortalBundle = fs.readFileSync(new URL('../supabase/migrations/20260812102000_compiled_attendance_session_portal.sql', import.meta.url), 'utf8');
+const recoveryFullPortalBundle = fs.readFileSync(new URL('../supabase/migrations/20260812183000_restore_full_employee_portal_bundle.sql', import.meta.url), 'utf8');
+
+function loaderScript() {
+  const match = page.match(/<script>([\s\S]*?)<\/script>/i);
+  assert.ok(match, 'attendance loader script should exist');
+  return match[1];
+}
+
+async function executePortalLoader(fixtureHtml) {
+  const encoded = gzipSync(Buffer.from(fixtureHtml, 'utf8')).toString('base64');
+  let renderedHtml = '';
+  let settle;
+  const requestedUrls = [];
+  const completed = new Promise(resolve => { settle = resolve; });
+  const body = {
+    _html: '',
+    set innerHTML(value) {
+      this._html = String(value);
+      if (this._html.includes('Unable to open the Employee Portal')) settle();
+    },
+    get innerHTML() {
+      return this._html;
+    },
+  };
+  const document = {
+    body,
+    open() {},
+    write(value) {
+      renderedHtml = String(value);
+      settle();
+    },
+    close() {},
+    getElementById(id) {
+      if (id !== 'retryPortal') return null;
+      return { addEventListener() {} };
+    },
+  };
+  const window = {
+    setTimeout,
+    clearTimeout,
+    DecompressionStream,
+  };
+  const context = {
+    window,
+    document,
+    fetch: async url => {
+      requestedUrls.push(String(url));
+      return { ok: true, text: async () => encoded };
+    },
+    AbortController,
+    Blob,
+    Response,
+    DecompressionStream,
+    Uint8Array,
+    atob: value => Buffer.from(value, 'base64').toString('binary'),
+    console,
+  };
+
+  vm.runInNewContext(loaderScript(), context, { filename: 'attendance/index.html' });
+  await Promise.race([
+    completed,
+    new Promise((_, reject) => setTimeout(() => reject(new Error('portal loader test timed out')), 1000)),
+  ]);
+  return { renderedHtml, bodyHtml: body.innerHTML, requestedUrls };
+}
+
+async function assertIntegrityRejected(fixtureHtml) {
+  const result = await executePortalLoader(fixtureHtml);
+  assert.equal(result.renderedHtml, '');
+  assert.match(result.bodyHtml, /Unable to open the Employee Portal/);
+  assert.match(result.bodyHtml, /failed its integrity check/);
+}
 
 test('attendance uses explicit session lifecycle and one open session per employee', () => {
   assert.match(migration, /session_state in \('not_started','open','closed','needs_review'\)/);
@@ -74,10 +149,42 @@ test('edge function returns readable structured attendance errors', () => {
   assert.match(portal, /error\.context/);
 });
 
-test('employee attendance is served directly from source control', () => {
-  assert.match(page, /<script src="\/config\.js"><\/script>/);
-  assert.match(page, /<script src="\/attendance\/portal\.js"><\/script>/);
-  assert.doesNotMatch(page, /hrms-static-assets\?bundle=attendance/);
-  assert.doesNotMatch(page, /DecompressionStream/);
+test('employee URL requests and renders the full Employee Portal attendance bundle', async () => {
+  const fullWorkspace = '<main id="portalApp"><nav data-page="dashboard"></nav><section class="portal-shell">Requests Leave Advance Notification Profile</section></main>';
+  const result = await executePortalLoader(fullWorkspace);
+  assert.equal(result.renderedHtml, fullWorkspace);
+  assert.doesNotMatch(result.bodyHtml, /Unable to open the Employee Portal/);
+  assert.equal(result.requestedUrls.length, 1);
+  const requested = new URL(result.requestedUrls[0]);
+  assert.equal(requested.pathname, '/functions/v1/hrms-static-assets');
+  assert.equal(requested.searchParams.get('bundle'), 'attendance');
+  assert.doesNotMatch(page, /<script src="\/attendance\/portal\.js"><\/script>/);
   assert.doesNotMatch(page, /patchAttendanceBundle/);
+});
+
+test('employee URL rejects an attendance-only bundle and renders the integrity-error state', async () => {
+  await assertIntegrityRejected('<main id="portalApp"><section>Check In Break Check Out</section></main>');
+});
+
+test('employee portal integrity requires the workspace root marker', async () => {
+  await assertIntegrityRejected('<main id="employeeApp"><nav data-page="dashboard"></nav><section class="portal-shell">Requests Leave Advance Notification Profile</section></main>');
+});
+
+test('employee portal integrity requires navigation', async () => {
+  await assertIntegrityRejected('<main id="portalApp"><nav></nav><section class="portal-shell">Requests Leave Advance Notification Profile</section></main>');
+});
+
+test('employee portal integrity requires the workspace shell or sidebar layout', async () => {
+  await assertIntegrityRejected('<main id="portalApp"><nav data-page="dashboard"></nav><section class="workspace-content">Requests Leave Advance Notification Profile</section></main>');
+});
+
+test('employee portal integrity requires employee workspace features', async () => {
+  await assertIntegrityRejected('<main id="portalApp"><nav data-page="dashboard"></nav><section class="portal-shell">Attendance Check In Break Check Out</section></main>');
+});
+
+test('recovery migration restores the exact deterministic full portal bundle', () => {
+  assert.equal(recoveryFullPortalBundle, originalFullPortalBundle);
+  assert.match(recoveryFullPortalBundle, /delete from app_private\.frontend_bundle_parts where bundle='attendance'/);
+  assert.match(recoveryFullPortalBundle, /length\(v_payload\) <> 16992/);
+  assert.equal((recoveryFullPortalBundle.match(/values \('attendance',/g) || []).length, 3);
 });
