@@ -28,13 +28,16 @@ export default async function handler(req, res) {
     }),
   ]);
 
+  let adminHtml = '';
   for (const item of [adminBundle, portalBundle]) {
     if (!item.ok || !item.body) continue;
     try {
+      const bundleName = item.name === 'admin-bundle' ? 'admin' : 'attendance';
       const encoded = item.body.length < item.length
-        ? await (await fetch(`${base}/hrms-static-assets?bundle=${item.name === 'admin-bundle' ? 'admin' : 'attendance'}`)).text()
+        ? await (await fetch(`${base}/hrms-static-assets?bundle=${bundleName}`)).text()
         : item.body;
       const html = gunzipSync(Buffer.from(encoded, 'base64')).toString('utf8');
+      if (bundleName === 'admin') adminHtml = html;
       item.bundle = {
         decoded: true,
         htmlLength: html.length,
@@ -50,7 +53,20 @@ export default async function handler(req, res) {
     }
   }
 
+  const referencedFunctions = new Set();
+  if (adminHtml) {
+    for (const pattern of [/functions\.invoke\(['"]([^'"]+)['"]/g, /functionCall\(['"]([^'"]+)['"]/g]) {
+      for (const match of adminHtml.matchAll(pattern)) referencedFunctions.add(match[1]);
+    }
+  }
+  referencedFunctions.add('attendance-event');
+  const functionHealth = await Promise.all([...referencedFunctions].sort().map(name => probe(name, `${base}/${name}`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({}),
+  })));
+
   res.setHeader('content-type', 'application/json');
   res.setHeader('cache-control', 'no-store');
-  res.status(200).json({ checkedAt: new Date().toISOString(), adminBundle, portalBundle, attendanceEvent });
+  res.status(200).json({ checkedAt: new Date().toISOString(), adminBundle, portalBundle, attendanceEvent, referencedFunctions: [...referencedFunctions].sort(), functionHealth });
 }
