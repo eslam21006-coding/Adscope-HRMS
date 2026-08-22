@@ -27,6 +27,7 @@ async function executePortalLoader(fixtureHtml) {
   const encoded = gzipSync(Buffer.from(fixtureHtml, 'utf8')).toString('base64');
   let renderedHtml = '';
   let settle;
+  const requestedUrls = [];
   const completed = new Promise(resolve => { settle = resolve; });
   const body = {
     _html: '',
@@ -59,7 +60,10 @@ async function executePortalLoader(fixtureHtml) {
   const context = {
     window,
     document,
-    fetch: async () => ({ ok: true, text: async () => encoded }),
+    fetch: async url => {
+      requestedUrls.push(String(url));
+      return { ok: true, text: async () => encoded };
+    },
     AbortController,
     Blob,
     Response,
@@ -74,7 +78,14 @@ async function executePortalLoader(fixtureHtml) {
     completed,
     new Promise((_, reject) => setTimeout(() => reject(new Error('portal loader test timed out')), 1000)),
   ]);
-  return { renderedHtml, bodyHtml: body.innerHTML };
+  return { renderedHtml, bodyHtml: body.innerHTML, requestedUrls };
+}
+
+async function assertIntegrityRejected(fixtureHtml) {
+  const result = await executePortalLoader(fixtureHtml);
+  assert.equal(result.renderedHtml, '');
+  assert.match(result.bodyHtml, /Unable to open the Employee Portal/);
+  assert.match(result.bodyHtml, /failed its integrity check/);
 }
 
 test('attendance uses explicit session lifecycle and one open session per employee', () => {
@@ -138,21 +149,37 @@ test('edge function returns readable structured attendance errors', () => {
   assert.match(portal, /error\.context/);
 });
 
-test('employee URL executes the loader and renders a valid full Employee Portal workspace bundle', async () => {
+test('employee URL requests and renders the full Employee Portal attendance bundle', async () => {
   const fullWorkspace = '<main id="portalApp"><nav data-page="dashboard"></nav><section class="portal-shell">Requests Leave Advance Notification Profile</section></main>';
   const result = await executePortalLoader(fullWorkspace);
   assert.equal(result.renderedHtml, fullWorkspace);
   assert.doesNotMatch(result.bodyHtml, /Unable to open the Employee Portal/);
+  assert.equal(result.requestedUrls.length, 1);
+  const requested = new URL(result.requestedUrls[0]);
+  assert.equal(requested.pathname, '/functions/v1/hrms-static-assets');
+  assert.equal(requested.searchParams.get('bundle'), 'attendance');
   assert.doesNotMatch(page, /<script src="\/attendance\/portal\.js"><\/script>/);
   assert.doesNotMatch(page, /patchAttendanceBundle/);
 });
 
 test('employee URL rejects an attendance-only bundle and renders the integrity-error state', async () => {
-  const attendanceOnly = '<main id="portalApp"><section>Check In Break Check Out</section></main>';
-  const result = await executePortalLoader(attendanceOnly);
-  assert.equal(result.renderedHtml, '');
-  assert.match(result.bodyHtml, /Unable to open the Employee Portal/);
-  assert.match(result.bodyHtml, /failed its integrity check/);
+  await assertIntegrityRejected('<main id="portalApp"><section>Check In Break Check Out</section></main>');
+});
+
+test('employee portal integrity requires the workspace root marker', async () => {
+  await assertIntegrityRejected('<main id="employeeApp"><nav data-page="dashboard"></nav><section class="portal-shell">Requests Leave Advance Notification Profile</section></main>');
+});
+
+test('employee portal integrity requires navigation', async () => {
+  await assertIntegrityRejected('<main id="portalApp"><nav></nav><section class="portal-shell">Requests Leave Advance Notification Profile</section></main>');
+});
+
+test('employee portal integrity requires the workspace shell or sidebar layout', async () => {
+  await assertIntegrityRejected('<main id="portalApp"><nav data-page="dashboard"></nav><section class="workspace-content">Requests Leave Advance Notification Profile</section></main>');
+});
+
+test('employee portal integrity requires employee workspace features', async () => {
+  await assertIntegrityRejected('<main id="portalApp"><nav data-page="dashboard"></nav><section class="portal-shell">Attendance Check In Break Check Out</section></main>');
 });
 
 test('recovery migration restores the exact deterministic full portal bundle', () => {
