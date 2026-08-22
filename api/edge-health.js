@@ -18,8 +18,8 @@ export default async function handler(req, res) {
     }
   }
 
-  const [adminAsset, portalBundle, attendanceEvent] = await Promise.all([
-    probe('admin-asset', `${base}/hrms-static-assets?file=admin.js`),
+  const [adminBundle, portalBundle, attendanceEvent] = await Promise.all([
+    probe('admin-bundle', `${base}/hrms-static-assets?bundle=admin`),
     probe('employee-portal-bundle', `${base}/hrms-static-assets?bundle=attendance`),
     probe('attendance-event-unauthenticated', `${base}/attendance-event`, {
       method: 'POST',
@@ -28,26 +28,29 @@ export default async function handler(req, res) {
     }),
   ]);
 
-  if (portalBundle.ok && portalBundle.body) {
+  for (const item of [adminBundle, portalBundle]) {
+    if (!item.ok || !item.body) continue;
     try {
-      const fullResponse = await fetch(`${base}/hrms-static-assets?bundle=attendance`);
-      const encoded = await fullResponse.text();
+      const encoded = item.body.length < item.length
+        ? await (await fetch(`${base}/hrms-static-assets?bundle=${item.name === 'admin-bundle' ? 'admin' : 'attendance'}`)).text()
+        : item.body;
       const html = gunzipSync(Buffer.from(encoded, 'base64')).toString('utf8');
-      portalBundle.bundle = {
+      item.bundle = {
         decoded: true,
         htmlLength: html.length,
         hasRoot: /id=["'](?:app|portalApp)["']/i.test(html),
         hasNavigation: /data-page=/i.test(html),
         hasLayout: /portal-shell|class=["'][^"']*\bshell\b|<nav\b|class=["'][^"']*\bsidebar\b/i.test(html),
         hasEmployeeFeatures: /requests|leave|advance|notification|profile/i.test(html),
+        containsRawNon2xxText: /Edge Function returned a non-2xx status code/i.test(html),
       };
-      delete portalBundle.body;
+      delete item.body;
     } catch (error) {
-      portalBundle.bundle = { decoded: false, error: String(error?.message || error) };
+      item.bundle = { decoded: false, error: String(error?.message || error) };
     }
   }
 
   res.setHeader('content-type', 'application/json');
   res.setHeader('cache-control', 'no-store');
-  res.status(200).json({ checkedAt: new Date().toISOString(), adminAsset, portalBundle, attendanceEvent });
+  res.status(200).json({ checkedAt: new Date().toISOString(), adminBundle, portalBundle, attendanceEvent });
 }
