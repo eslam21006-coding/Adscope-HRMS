@@ -1,3 +1,5 @@
+import vm from 'node:vm';
+
 export default async function handler(req, res) {
   try {
     const base = `https://${req.headers.host}`;
@@ -8,7 +10,7 @@ export default async function handler(req, res) {
     ]);
     if (!portalResponse.ok || !pageResponse.ok || !stylesResponse.ok) throw new Error('Portal assets are not all reachable');
     const [portal, page, styles] = await Promise.all([portalResponse.text(), pageResponse.text(), stylesResponse.text()]);
-    new Function(portal);
+    new vm.Script(portal, { filename:'portal.js' });
     const required = ['Home','Attendance','Requests','Leave','Salary Advances','Violations','Notifications','Profile'];
     const missing = required.filter(label => !portal.includes(label));
     const checks = {
@@ -19,11 +21,11 @@ export default async function handler(req, res) {
       attendanceState: portal.includes("client.rpc('get_my_attendance_state')"),
       attendanceAction: portal.includes("client.functions.invoke('attendance-event'"),
       responsiveWorkspace: styles.includes('.workspace') && styles.includes('.mobile-nav'),
-      requestSubmission: portal.includes("submit_permission_request") && portal.includes("submit_leave_request") && portal.includes("submit_advance_request")
+      requestSubmission: portal.includes('submit_permission_request') && portal.includes('submit_leave_request') && portal.includes('submit_advance_request')
     };
     res.setHeader('Cache-Control','no-store');
     res.status(Object.values(checks).every(Boolean) ? 200 : 500).json({ checks, missing, portalBytes:portal.length, styleBytes:styles.length });
   } catch (error) {
-    res.status(500).json({ error: error instanceof Error ? error.message : 'Portal validation failed' });
+    res.status(500).json({ error: error instanceof Error ? error.message : 'Portal validation failed', stack: error instanceof Error ? error.stack : null });
   }
 }
