@@ -2,13 +2,13 @@ import vm from 'node:vm';
 
 export default async function handler(req, res) {
   try {
-    const base = `https://${req.headers.host}`;
+    const raw = 'https://raw.githubusercontent.com/eslam21006-coding/Adscope-HRMS/fix/rebuild-full-employee-portal-source';
     const [portalResponse, pageResponse, stylesResponse] = await Promise.all([
-      fetch(`${base}/attendance/portal.js`, { cache:'no-store' }),
-      fetch(`${base}/attendance/`, { cache:'no-store' }),
-      fetch(`${base}/attendance/styles.css`, { cache:'no-store' })
+      fetch(`${raw}/attendance/portal.js`, { cache:'no-store' }),
+      fetch(`${raw}/attendance/index.html`, { cache:'no-store' }),
+      fetch(`${raw}/attendance/styles.css`, { cache:'no-store' })
     ]);
-    if (!portalResponse.ok || !pageResponse.ok || !stylesResponse.ok) throw new Error('Portal assets are not all reachable');
+    if (!portalResponse.ok || !pageResponse.ok || !stylesResponse.ok) throw new Error('Portal source assets are not all reachable');
     const [portal, page, styles] = await Promise.all([portalResponse.text(), pageResponse.text(), stylesResponse.text()]);
     new vm.Script(portal, { filename:'portal.js' });
     const required = ['Home','Attendance','Requests','Leave','Salary Advances','Violations','Notifications','Profile'];
