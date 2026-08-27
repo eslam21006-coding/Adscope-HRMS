@@ -1,15 +1,11 @@
 import vm from 'node:vm';
+import { readFileSync } from 'node:fs';
 
 export default async function handler(req, res) {
   try {
-    const raw = 'https://raw.githubusercontent.com/eslam21006-coding/Adscope-HRMS/fix/rebuild-full-employee-portal-source';
-    const [portalResponse, pageResponse, stylesResponse] = await Promise.all([
-      fetch(`${raw}/attendance/portal.js`, { cache:'no-store' }),
-      fetch(`${raw}/attendance/index.html`, { cache:'no-store' }),
-      fetch(`${raw}/attendance/styles.css`, { cache:'no-store' })
-    ]);
-    if (!portalResponse.ok || !pageResponse.ok || !stylesResponse.ok) throw new Error('Portal source assets are not all reachable');
-    const [portal, page, styles] = await Promise.all([portalResponse.text(), pageResponse.text(), stylesResponse.text()]);
+    const portal = readFileSync(new URL('../attendance/portal.js', import.meta.url), 'utf8');
+    const page = readFileSync(new URL('../attendance/index.html', import.meta.url), 'utf8');
+    const styles = readFileSync(new URL('../attendance/styles.css', import.meta.url), 'utf8');
     new vm.Script(portal, { filename:'portal.js' });
     const required = ['Home','Attendance','Requests','Leave','Salary Advances','Violations','Notifications','Profile'];
     const missing = required.filter(label => !portal.includes(label));
