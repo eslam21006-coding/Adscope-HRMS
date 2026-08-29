@@ -131,6 +131,17 @@ set
   scheduled_end = time '21:00:00',
   scheduled_break_minutes = 60,
   required_hours = 8,
+  session_expires_at = case
+    when ad.session_state = 'open' and ad.check_in_at is not null then
+      app_private.attendance_session_expiry(
+        ad.organization_id,
+        ad.attendance_date,
+        time '12:00:00',
+        time '21:00:00',
+        ad.check_in_at
+      )
+    else ad.session_expires_at
+  end,
   status = case
     when ad.check_in_at is null and ad.check_out_at is null and not coalesce(ad.requires_owner_review, false)
       then 'not_started'::public.attendance_status
