@@ -33,5 +33,6 @@ test('already-generated Saturdays from 2026-08-29 are corrected and recalculated
   assert.match(migration, /attendance_date >= date '2026-08-29'/)
   assert.match(migration, /scheduled_start = time '12:00:00'/)
   assert.match(migration, /scheduled_end = time '21:00:00'/)
+  assert.match(migration, /session_expires_at = case[\s\S]*attendance_session_expiry[\s\S]*time '21:00:00'/)
   assert.match(migration, /perform app_private\.recompute_attendance_day\(r\.id\)/)
 })
