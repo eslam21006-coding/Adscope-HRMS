@@ -58,7 +58,9 @@ begin
       and h.holiday_date = p_date
   ) into v_is_holiday;
 
-  v_is_full_time_saturday := v_employee.employment_type = 'full_time' and v_dow = 6;
+  v_is_full_time_saturday := v_employee.employment_type = 'full_time'
+    and p_date >= date '2026-08-29'
+    and v_dow = 6;
 
   v_workday := v_shift.id is not null
     and not v_is_holiday
@@ -101,12 +103,40 @@ begin
     payroll_period_id = case when public.attendance_days.check_in_at is null and public.attendance_days.check_out_at is null then excluded.payroll_period_id else public.attendance_days.payroll_period_id end,
     scheduled_workday = case when public.attendance_days.check_in_at is null and public.attendance_days.check_out_at is null then excluded.scheduled_workday else public.attendance_days.scheduled_workday end,
     shift_id = case when public.attendance_days.check_in_at is null and public.attendance_days.check_out_at is null then excluded.shift_id else public.attendance_days.shift_id end,
-    scheduled_start = case when public.attendance_days.check_in_at is null and public.attendance_days.check_out_at is null then excluded.scheduled_start else public.attendance_days.scheduled_start end,
-    scheduled_end = case when public.attendance_days.check_in_at is null and public.attendance_days.check_out_at is null then excluded.scheduled_end else public.attendance_days.scheduled_end end,
+    scheduled_start = case
+      when public.attendance_days.check_in_at is null and public.attendance_days.check_out_at is null
+        and not exists (
+          select 1 from public.permission_requests pr
+          where pr.employee_id = public.attendance_days.employee_id
+            and pr.request_date = public.attendance_days.attendance_date
+            and pr.request_type = 'late_start'
+            and pr.status = 'approved'
+        )
+      then excluded.scheduled_start
+      else public.attendance_days.scheduled_start
+    end,
+    scheduled_end = case
+      when public.attendance_days.check_in_at is null and public.attendance_days.check_out_at is null
+        and not exists (
+          select 1 from public.permission_requests pr
+          where pr.employee_id = public.attendance_days.employee_id
+            and pr.request_date = public.attendance_days.attendance_date
+            and pr.request_type = 'early_leave'
+            and pr.status = 'approved'
+        )
+      then excluded.scheduled_end
+      else public.attendance_days.scheduled_end
+    end,
     scheduled_break_minutes = case when public.attendance_days.check_in_at is null and public.attendance_days.check_out_at is null then excluded.scheduled_break_minutes else public.attendance_days.scheduled_break_minutes end,
     required_hours = case when public.attendance_days.check_in_at is null and public.attendance_days.check_out_at is null then excluded.required_hours else public.attendance_days.required_hours end,
     grace_minutes = case when public.attendance_days.check_in_at is null and public.attendance_days.check_out_at is null then excluded.grace_minutes else public.attendance_days.grace_minutes end,
-    status = case when public.attendance_days.check_in_at is null and public.attendance_days.check_out_at is null then excluded.status else public.attendance_days.status end
+    status = case
+      when public.attendance_days.check_in_at is null
+        and public.attendance_days.check_out_at is null
+        and coalesce(public.attendance_days.status_override, public.attendance_days.status) = 'weekend'::public.attendance_status
+      then excluded.status
+      else public.attendance_days.status
+    end
   returning id into v_day;
 
   if v_day is null then
@@ -120,15 +150,34 @@ end;
 $function$;
 
 comment on function app_private.ensure_attendance_day(uuid, date) is
-  'Generates attendance days from the assigned shift, with a full-time Saturday exception of 12:00-21:00, a 60-minute scheduled break and 8 required hours. Early check-in is allowed.';
+  'Generates attendance days from the assigned shift, with a full-time Saturday exception from 2026-08-29 of 12:00-21:00, a 60-minute scheduled break and 8 required hours. Approved date-specific permissions are preserved.';
 
 -- Correct already-generated Saturday rows from the effective date onward,
--- including an open/closed current-day session, while preserving raw events.
+-- including an open/closed current-day session, while preserving raw events,
+-- approved leave and approved date-specific schedule permissions.
 update public.attendance_days ad
 set
   scheduled_workday = true,
-  scheduled_start = time '12:00:00',
-  scheduled_end = time '21:00:00',
+  scheduled_start = case
+    when exists (
+      select 1 from public.permission_requests pr
+      where pr.employee_id = ad.employee_id
+        and pr.request_date = ad.attendance_date
+        and pr.request_type = 'late_start'
+        and pr.status = 'approved'
+    ) then ad.scheduled_start
+    else time '12:00:00'
+  end,
+  scheduled_end = case
+    when exists (
+      select 1 from public.permission_requests pr
+      where pr.employee_id = ad.employee_id
+        and pr.request_date = ad.attendance_date
+        and pr.request_type = 'early_leave'
+        and pr.status = 'approved'
+    ) then ad.scheduled_end
+    else time '21:00:00'
+  end,
   scheduled_break_minutes = 60,
   required_hours = 8,
   session_expires_at = case
@@ -136,15 +185,36 @@ set
       app_private.attendance_session_expiry(
         ad.organization_id,
         ad.attendance_date,
-        time '12:00:00',
-        time '21:00:00',
+        case
+          when exists (
+            select 1 from public.permission_requests pr
+            where pr.employee_id = ad.employee_id
+              and pr.request_date = ad.attendance_date
+              and pr.request_type = 'late_start'
+              and pr.status = 'approved'
+          ) then ad.scheduled_start
+          else time '12:00:00'
+        end,
+        case
+          when exists (
+            select 1 from public.permission_requests pr
+            where pr.employee_id = ad.employee_id
+              and pr.request_date = ad.attendance_date
+              and pr.request_type = 'early_leave'
+              and pr.status = 'approved'
+          ) then ad.scheduled_end
+          else time '21:00:00'
+        end,
         ad.check_in_at
       )
     else ad.session_expires_at
   end,
   status = case
-    when ad.check_in_at is null and ad.check_out_at is null and not coalesce(ad.requires_owner_review, false)
-      then 'not_started'::public.attendance_status
+    when ad.check_in_at is null
+      and ad.check_out_at is null
+      and not coalesce(ad.requires_owner_review, false)
+      and coalesce(ad.status_override, ad.status) = 'weekend'::public.attendance_status
+    then 'not_started'::public.attendance_status
     else ad.status
   end,
   updated_at = now()
@@ -153,6 +223,7 @@ where e.id = ad.employee_id
   and e.employment_type = 'full_time'
   and ad.attendance_date >= date '2026-08-29'
   and extract(dow from ad.attendance_date)::integer = 6
+  and app_private.effective_shift(e.id, ad.attendance_date) is not null
   and not coalesce(ad.is_test_record, false)
   and not exists (
     select 1
@@ -174,6 +245,7 @@ begin
     where e.employment_type = 'full_time'
       and ad.attendance_date >= date '2026-08-29'
       and extract(dow from ad.attendance_date)::integer = 6
+      and app_private.effective_shift(e.id, ad.attendance_date) is not null
       and not coalesce(ad.is_test_record, false)
       and not exists (
         select 1
