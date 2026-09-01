@@ -6,12 +6,19 @@ const migration = readFileSync(new URL('../supabase/migrations/20260829173000_fu
 const generationGuard = readFileSync(new URL('../supabase/migrations/20260829173500_full_time_saturday_generation_guard.sql', import.meta.url), 'utf8')
 const actionMigration = readFileSync(new URL('../supabase/migrations/20260812100500_attendance_session_actions.sql', import.meta.url), 'utf8')
 
-test('full-time employees use the Saturday 12pm to 9pm schedule from the effective date', () => {
-  assert.match(migration, /employment_type = 'full_time'[\s\S]*p_date >= date '2026-08-29'[\s\S]*v_dow = 6/)
+test('Adscope full-time employees use the Saturday 12pm to 9pm schedule from the effective date', () => {
+  assert.match(migration, /o\.code='ADSCOPE'/)
+  assert.match(migration, /v_is_adscope[\s\S]*employment_type = 'full_time'[\s\S]*p_date >= date '2026-08-29'[\s\S]*v_dow = 6/)
   assert.match(migration, /time '12:00:00'/)
   assert.match(migration, /time '21:00:00'/)
   assert.match(migration, /v_scheduled_break_minutes := case[\s\S]*then 60/)
   assert.match(migration, /v_required_hours := case[\s\S]*then 8/)
+})
+
+test('Saturday policy does not leak to other organizations', () => {
+  assert.match(migration, /where o\.id=v_employee\.organization_id and o\.code='ADSCOPE'/)
+  assert.match(migration, /join public\.organizations o on o\.id=e\.organization_id and o\.code='ADSCOPE'/)
+  assert.match(generationGuard, /e\.employment_type='full_time' and o\.code='ADSCOPE'/)
 })
 
 test('dates before 29 August 2026 do not receive the Saturday exception', () => {
@@ -19,7 +26,7 @@ test('dates before 29 August 2026 do not receive the Saturday exception', () => 
   assert.match(generationGuard, /new\.attendance_date < date '2026-08-29'[\s\S]*return new/)
 })
 
-test('Saturday becomes a workday for full-time employees but official holidays still win', () => {
+test('Saturday becomes a workday for Adscope full-time employees but official holidays still win', () => {
   assert.match(migration, /not v_is_holiday[\s\S]*v_is_full_time_saturday or v_dow = any\(v_shift\.workdays\)/)
   assert.match(migration, /when v_is_holiday then 'holiday'/)
 })
@@ -49,20 +56,21 @@ test('approved date-specific permissions are preserved during the Saturday backf
   assert.match(migration, /request_type = 'early_leave'[\s\S]*status = 'approved'[\s\S]*then ad\.scheduled_end/)
 })
 
-test('approved leave is not reset to not started during Saturday correction', () => {
-  assert.match(migration, /coalesce\(ad\.status_override, ad\.status\) = 'weekend'::public\.attendance_status[\s\S]*then 'not_started'/)
+test('approved leave and Owner-review rows are not reset to not started', () => {
+  assert.match(migration, /not coalesce\(ad\.requires_owner_review, false\)[\s\S]*coalesce\(ad\.status_override, ad\.status\) = 'weekend'/)
+  assert.match(migration, /not coalesce\(public\.attendance_days\.requires_owner_review,false\)[\s\S]*coalesce\(public\.attendance_days\.status_override, public\.attendance_days\.status\) = 'weekend'/)
   assert.doesNotMatch(migration, /coalesce\(ad\.status_override, ad\.status\) in \([^)]*leave[^)]*\)[\s\S]*then 'not_started'/i)
 })
 
-test('future generated attendance rows are normalized on insert', () => {
+test('future generated attendance rows are normalized on insert only for Adscope', () => {
   assert.match(generationGuard, /before insert on public\.attendance_days/)
-  assert.match(generationGuard, /employment_type = 'full_time'/)
+  assert.match(generationGuard, /employment_type='full_time' and o\.code='ADSCOPE'/)
   assert.match(generationGuard, /extract\(dow from new\.attendance_date\)::integer <> 6/)
-  assert.match(generationGuard, /new\.scheduled_workday := true/)
-  assert.match(generationGuard, /new\.scheduled_start := time '12:00:00'/)
-  assert.match(generationGuard, /new\.scheduled_end := time '21:00:00'/)
-  assert.match(generationGuard, /new\.scheduled_break_minutes := 60/)
-  assert.match(generationGuard, /new\.required_hours := 8/)
+  assert.match(generationGuard, /new\.scheduled_workday:=true/)
+  assert.match(generationGuard, /new\.scheduled_start:=time '12:00:00'/)
+  assert.match(generationGuard, /new\.scheduled_end:=time '21:00:00'/)
+  assert.match(generationGuard, /new\.scheduled_break_minutes:=60/)
+  assert.match(generationGuard, /new\.required_hours:=8/)
   assert.match(generationGuard, /if v_is_holiday then[\s\S]*return new/)
 })
 
