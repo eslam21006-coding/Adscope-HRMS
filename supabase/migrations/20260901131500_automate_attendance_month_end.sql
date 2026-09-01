@@ -8,8 +8,9 @@
 -- 2. Missing checkout: after the attendance session hard-expiry, preserve the
 --    missing raw checkout but cap payroll attendance at the scheduled shift end.
 --    No automatic overtime is credited.
--- 3. System issues, ambiguous/invalid records, unusual extended checkouts and
---    employee-submitted pending requests remain real Owner-review exceptions.
+-- 3. System issues, ambiguous/invalid records, unscheduled-day attendance,
+--    unusual extended checkouts and employee-submitted pending requests remain
+--    real Owner-review exceptions.
 -- 4. A current/future payroll month can never be closed early. Future scheduled
 --    days are not reported as employee attendance failures.
 
@@ -73,15 +74,12 @@ set search_path to 'public','app_private','extensions'
 as $function$
 declare
   d public.attendance_days%rowtype;
-  e public.employees%rowtype;
   v_deadline timestamptz;
   v_type uuid;
   v_violation_id uuid;
   v_old jsonb;
 begin
   select * into d from public.attendance_days where id=p_day_id for update;
-  if not found then return false; end if;
-  select * into e from public.employees where id=d.employee_id;
   if not found then return false; end if;
 
   if d.is_test_record
@@ -98,7 +96,7 @@ begin
   );
   if v_deadline is null or p_now<v_deadline then return false; end if;
 
-  -- Any pending request deserves human review instead of an automatic absence.
+  -- A submitted employee request must be decided before a default is applied.
   if exists(
     select 1 from public.permission_requests pr
     where pr.employee_id=d.employee_id
@@ -135,8 +133,7 @@ begin
       updated_at=p_now
   where id=d.id;
 
-  -- Create a draft incident only. This does not finalize a disciplinary sanction
-  -- and does not block payroll merely because the employee forgot to check in.
+  -- The discipline case remains a draft. No sanction is finalized here.
   select id into v_type
   from public.violation_types
   where organization_id=d.organization_id
@@ -145,6 +142,7 @@ begin
   limit 1;
 
   if v_type is not null
+     and (select auth.uid()) is not null
      and not exists(
        select 1 from public.violations v
        where v.employee_id=d.employee_id
@@ -209,6 +207,7 @@ begin
 
   if d.is_test_record
      or d.system_issue
+     or not d.scheduled_workday
      or d.check_in_at is null
      or d.check_out_at is not null
      or d.scheduled_start is null
@@ -216,6 +215,34 @@ begin
   then
     return false;
   end if;
+
+  -- Do not clear an existing ambiguous review. Only a still-open session or a
+  -- review record explicitly created for an ordinary expired missing checkout
+  -- may use the scheduled-end default.
+  if d.session_state='needs_review' or d.requires_owner_review then
+    if coalesce(d.status_override,d.status)<>'missing_checkout'
+       or d.review_reason is null
+       or d.review_reason not ilike 'Missing checkout:%'
+    then
+      return false;
+    end if;
+  end if;
+
+  -- A pending date-specific schedule/correction request must be decided before
+  -- a synthetic payroll checkout is created from the current schedule.
+  if exists(
+    select 1 from public.permission_requests pr
+    where pr.employee_id=d.employee_id
+      and pr.request_date=d.attendance_date
+      and pr.status='pending'
+  ) then return false; end if;
+
+  if exists(
+    select 1 from public.leave_requests lr
+    where lr.employee_id=d.employee_id
+      and lr.status in ('draft','pending')
+      and d.attendance_date between lr.start_date and lr.end_date
+  ) then return false; end if;
 
   v_expiry:=coalesce(
     d.session_expires_at,
@@ -230,9 +257,8 @@ begin
   v_cap:=(d.attendance_date::timestamp+d.scheduled_end) at time zone v_timezone;
   if d.scheduled_end<=d.scheduled_start then v_cap:=v_cap+interval '1 day'; end if;
 
-  -- If the employee checked in after the scheduled end, the default cap would
-  -- create a zero/negative interval. That is genuinely ambiguous and must stay
-  -- in Owner review instead of being guessed.
+  -- If check-in is after the scheduled end, the cap would create a zero or
+  -- negative interval. That remains an Owner-review exception.
   if v_cap<=d.check_in_at then return false; end if;
 
   v_break:=greatest(coalesce(d.break_minutes,0),coalesce(d.scheduled_break_minutes,0));
@@ -281,8 +307,9 @@ $function$;
 revoke all on function app_private.auto_finalize_missing_checkout(uuid,timestamptz,uuid)
   from public,anon,authenticated;
 
--- Portal state/actions call this function already. Replace the old behavior that
--- sent every ordinary missing checkout to Owner review with the default cap.
+-- Portal state/actions already call this function. Auto-resolved employee mistakes
+-- do not count as Owner-review warnings. Records that cannot be resolved safely
+-- are closed into review so they never block the employee's next workday.
 create or replace function app_private.expire_stale_attendance_sessions(
   p_employee_id uuid,
   p_now timestamptz default clock_timestamp(),
@@ -295,15 +322,16 @@ set search_path to 'public','app_private'
 as $function$
 declare
   r record;
-  v_count integer:=0;
+  v_owner_review_count integer:=0;
   v_today date;
   v_org uuid;
+  v_expiry timestamptz;
+  v_old jsonb;
 begin
   select organization_id into v_org from public.employees where id=p_employee_id;
   if v_org is null then return 0; end if;
   v_today:=app_private.organization_local_date(v_org,p_now);
 
-  -- Resolve missed check-ins only after the employee's 24-hour correction window.
   for r in
     select ad.id
     from public.attendance_days ad
@@ -316,30 +344,77 @@ begin
       and coalesce(ad.status_override,ad.status) in ('not_started','incomplete')
     order by ad.attendance_date
   loop
-    if app_private.auto_finalize_missed_checkin(r.id,p_now,p_request_id) then
-      v_count:=v_count+1;
-    end if;
+    perform app_private.auto_finalize_missed_checkin(r.id,p_now,p_request_id);
   end loop;
 
-  -- Resolve ordinary hard-expired missing checkouts. System issues and ambiguous
-  -- records intentionally remain Owner-review exceptions.
   for r in
-    select ad.id
+    select ad.*
     from public.attendance_days ad
     where ad.employee_id=p_employee_id
       and ad.check_in_at is not null
       and ad.check_out_at is null
       and not ad.is_test_record
-      and not ad.system_issue
       and ad.session_state in ('open','needs_review')
     order by ad.attendance_date
+    for update
   loop
     if app_private.auto_finalize_missing_checkout(r.id,p_now,p_request_id) then
-      v_count:=v_count+1;
+      continue;
     end if;
+
+    if r.session_state<>'open' then continue; end if;
+
+    v_expiry:=coalesce(
+      r.session_expires_at,
+      app_private.attendance_session_expiry(
+        r.organization_id,r.attendance_date,r.scheduled_start,r.scheduled_end,r.check_in_at
+      )
+    );
+    if v_expiry is null or v_expiry>p_now then continue; end if;
+
+    v_old:=to_jsonb(r);
+    update public.attendance_days
+    set session_state='needs_review',
+        session_expires_at=v_expiry,
+        requires_owner_review=true,
+        excluded_from_totals=true,
+        status_override='missing_checkout',
+        status='missing_checkout',
+        worked_minutes=0,
+        overtime_minutes=0,
+        approved_overtime_minutes=0,
+        deductible_late_minutes=0,
+        review_reason=coalesce(
+          review_reason,
+          case when r.system_issue
+            then 'System attendance issue with a missing checkout requires Owner review.'
+            when not r.scheduled_workday
+            then 'Missing checkout on an unscheduled day requires Owner review.'
+            else 'Missing checkout could not be safely resolved from the scheduled shift and requires Owner review.'
+          end
+        ),
+        closed_at=coalesce(closed_at,p_now),
+        updated_at=p_now
+    where id=r.id;
+
+    perform app_private.notify_owners(
+      r.organization_id,
+      'attendance_review_required',
+      'Attendance Review Needed',
+      format('%s has a missing checkout for %s that could not be safely resolved automatically. The old shift was closed for review and will not block a new workday.',
+        (select full_name from public.employees where id=r.employee_id),r.attendance_date),
+      'attendance_day',r.id
+    );
+
+    perform app_private.write_audit(
+      r.organization_id,'ATTENDANCE_SESSION_EXPIRED_TO_OWNER_REVIEW','attendance_day',r.id::text,
+      v_old,(select to_jsonb(x) from public.attendance_days x where x.id=r.id),
+      'The missing checkout reached hard expiry but could not be safely capped at the scheduled shift end. The session was closed into Owner review without inventing a raw checkout.',p_request_id
+    );
+    v_owner_review_count:=v_owner_review_count+1;
   end loop;
 
-  return v_count;
+  return v_owner_review_count;
 end;
 $function$;
 
@@ -427,193 +502,8 @@ $function$;
 revoke all on function app_private.apply_elapsed_attendance_defaults(uuid,timestamptz,uuid)
   from public,anon,authenticated;
 
-create or replace function public.payroll_preflight(p_period_id uuid)
-returns jsonb
-language plpgsql
-security definer
-set search_path to 'public','app_private'
-as $function$
-declare
-  p public.payroll_periods%rowtype;
-  blockers jsonb:='[]'::jsonb;
-  warnings jsonb:='[]'::jsonb;
-  r record;
-  v_today date;
-  v_defaults jsonb;
-  v_auto integer:=0;
-begin
-  if not app_private.has_any_role(array['owner','hr_admin','payroll_manager']::public.app_role[]) then
-    raise exception 'Not authorized';
-  end if;
-
-  select * into p
-  from public.payroll_periods
-  where id=p_period_id and organization_id=app_private.current_organization_id();
-  if not found then raise exception 'Payroll period not found'; end if;
-
-  v_today:=app_private.organization_local_date(p.organization_id,clock_timestamp());
-  v_defaults:=app_private.apply_elapsed_attendance_defaults(p.id,clock_timestamp(),null);
-  v_auto:=coalesce((v_defaults->>'total_auto_resolved')::integer,0);
-
-  if p.month_end>=v_today then
-    blockers:=blockers||jsonb_build_array(
-      format('Payroll month is still in progress. Attendance can be closed after %s.',p.month_end)
-    );
-  end if;
-
-  for r in
-    select e.id,e.employee_code,e.full_name,e.hire_date,e.basic_salary,e.compensation_type,
-           e.attendance_required,e.current_shift_id,e.payroll_currency
-    from public.employees e
-    where e.organization_id=p.organization_id
-      and e.status='active'
-      and (e.hire_date is null or e.hire_date<=p.month_end)
-      and (e.termination_date is null or e.termination_date>=p.month_start)
-  loop
-    select c.compensation_type,c.basic_salary,c.attendance_required,c.currency
-    into r.compensation_type,r.basic_salary,r.attendance_required,r.payroll_currency
-    from app_private.compensation_for_date_or_current(
-      r.id,greatest(p.month_start,coalesce(r.hire_date,p.month_start))
-    ) c;
-
-    if r.compensation_type<>'commission_only' and r.basic_salary<=0 then
-      blockers:=blockers||jsonb_build_array(r.employee_code||' has no valid base salary');
-    end if;
-    if r.attendance_required and r.current_shift_id is null then
-      blockers:=blockers||jsonb_build_array(r.employee_code||' has no assigned shift');
-    end if;
-    if r.payroll_currency is null then
-      blockers:=blockers||jsonb_build_array(r.employee_code||' has no payroll currency');
-    end if;
-
-    if exists(
-      select 1 from public.commissions x where x.employee_id=r.id and x.payment_month=p.month_start and x.currency<>r.payroll_currency
-      union all
-      select 1 from public.payroll_adjustments x where x.employee_id=r.id and x.payment_month=p.month_start and x.currency<>r.payroll_currency
-      union all
-      select 1 from public.advances x where x.employee_id=r.id and x.deduction_month=p.month_start and x.currency<>r.payroll_currency
-      union all
-      select 1 from public.violations x where x.employee_id=r.id and x.violation_date between p.month_start and p.month_end and x.currency<>r.payroll_currency
-    ) then
-      blockers:=blockers||jsonb_build_array(r.employee_code||' has a financial record in a different currency from the period compensation profile');
-    end if;
-
-    if exists(
-      select 1 from public.employee_compensation_history h
-      where h.employee_id=r.id
-        and h.effective_from between greatest(p.month_start,coalesce(r.hire_date,p.month_start))+1 and p.month_end
-    ) then
-      blockers:=blockers||jsonb_build_array(r.employee_code||' has a mid-period compensation change; move it to month start or use an approved adjustment');
-    end if;
-
-    if r.attendance_required and not exists(
-      select 1 from public.attendance_days ad
-      where ad.payroll_period_id=p.id
-        and ad.employee_id=r.id
-        and ad.scheduled_workday
-        and not ad.is_test_record
-    ) then
-      blockers:=blockers||jsonb_build_array(r.employee_code||' has no generated non-test attendance schedule');
-    end if;
-  end loop;
-
-  -- Future days are deliberately excluded here. A separate month-in-progress
-  -- blocker prevents early closure without pretending future shifts are failures.
-  for r in
-    select e.employee_code,ad.attendance_date,ad.system_issue,ad.review_reason,
-           ad.check_in_at,ad.check_out_at,ad.status,ad.session_state
-    from public.attendance_days ad
-    join public.employees e on e.id=ad.employee_id
-    cross join lateral app_private.compensation_for_date_or_current(
-      e.id,greatest(p.month_start,coalesce(e.hire_date,p.month_start))
-    ) c
-    where ad.payroll_period_id=p.id
-      and e.status='active'
-      and c.attendance_required
-      and not ad.is_test_record
-      and ad.scheduled_workday
-      and ad.attendance_date<v_today
-      and (
-        ad.requires_owner_review
-        or ad.session_state='needs_review'
-        or ad.status in ('not_started','incomplete','missing_checkout','invalid')
-      )
-    order by ad.attendance_date,e.employee_code
-  loop
-    blockers:=blockers||jsonb_build_array(
-      case
-        when r.system_issue then format('%s — %s: system attendance issue requires Owner review',r.employee_code,r.attendance_date)
-        when r.check_out_at is not null then format('%s — %s: unusual attendance record requires Owner review',r.employee_code,r.attendance_date)
-        else format('%s — %s: attendance exception requires Owner review',r.employee_code,r.attendance_date)
-      end
-    );
-  end loop;
-
-  if exists(
-    select 1 from public.permission_requests pr
-    where pr.organization_id=p.organization_id
-      and pr.status='pending'
-      and pr.request_date between p.month_start and p.month_end
-  ) then
-    blockers:=blockers||jsonb_build_array('Pending attendance or permission requests require Owner decision for this period');
-  end if;
-
-  if exists(
-    select 1 from public.leave_requests
-    where organization_id=p.organization_id
-      and status in ('draft','pending')
-      and start_date<=p.month_end and end_date>=p.month_start
-  ) then
-    blockers:=blockers||jsonb_build_array('Pending leave requests intersect this period');
-  end if;
-
-  if exists(
-    select 1 from public.commissions
-    where organization_id=p.organization_id and status='pending' and payment_month=p.month_start
-  ) then
-    blockers:=blockers||jsonb_build_array('Pending commissions exist for this period');
-  end if;
-
-  if exists(
-    select 1 from public.violations v
-    where v.organization_id=p.organization_id
-      and v.violation_date between p.month_start and p.month_end
-      and (v.workflow_status in ('notified','under_review') or v.appeal_status='pending')
-      and not exists(
-        select 1 from app_private.attendance_test_periods tp
-        where tp.organization_id=v.organization_id
-          and v.violation_date between tp.starts_on and tp.ends_on
-      )
-  ) then
-    blockers:=blockers||jsonb_build_array('Unresolved violations or appeals exist for this period');
-  end if;
-
-  if v_auto>0 then
-    warnings:=warnings||jsonb_build_array(
-      format('%s routine attendance exception(s) were automatically resolved using the company defaults: %s missed check-in absence(s), %s missing checkout scheduled-cap record(s).',
-        v_auto,
-        coalesce((v_defaults->>'missed_checkins_finalized')::integer,0),
-        coalesce((v_defaults->>'missing_checkouts_capped')::integer,0)
-      )
-    );
-  end if;
-
-  if exists(select 1 from public.attendance_days where payroll_period_id=p.id and is_test_record) then
-    warnings:=warnings||jsonb_build_array('Test attendance records exist and are excluded from payroll and attendance closure');
-  end if;
-
-  return jsonb_build_object(
-    'ok',jsonb_array_length(blockers)=0,
-    'blockers',blockers,
-    'warnings',warnings,
-    'auto_resolution',v_defaults
-  );
-end;
-$function$;
-
-revoke all on function public.payroll_preflight(uuid) from public,anon;
-grant execute on function public.payroll_preflight(uuid) to authenticated;
-
+-- Attendance closure uses the readiness function that is hardened in the next
+-- migration. This prevents a separate, inconsistent unresolved-count gate.
 create or replace function public.close_attendance_period(p_period_id uuid)
 returns void
 language plpgsql
@@ -693,24 +583,5 @@ begin
 end;
 $block$;
 
--- Clean historical August routine exceptions immediately when this migration is
--- applied. System issues and genuine review cases are intentionally untouched.
-do $block$
-declare
-  r record;
-begin
-  for r in
-    select pp.id
-    from public.payroll_periods pp
-    join public.organizations o on o.id=pp.organization_id
-    where o.code='ADSCOPE'
-      and pp.month_start=date '2026-08-01'
-      and pp.status='open'
-  loop
-    perform app_private.apply_elapsed_attendance_defaults(r.id,clock_timestamp(),null);
-  end loop;
-end;
-$block$;
-
 comment on function app_private.apply_elapsed_attendance_defaults(uuid,timestamptz,uuid) is
-  'Applies non-disciplinary attendance defaults so routine missed check-ins and missing checkouts do not become Owner payroll-cleanup work. System issues and genuine exceptions remain reviewable.';
+  'Applies non-disciplinary attendance defaults so routine missed check-ins and missing checkouts do not become Owner payroll-cleanup work. System issues and genuine exceptions remain reviewable. The function is invoked from authenticated payroll readiness rather than as a migration-time data rewrite.';
