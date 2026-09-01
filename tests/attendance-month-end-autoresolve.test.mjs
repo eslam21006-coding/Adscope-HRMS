@@ -26,7 +26,7 @@ test('missing checkout keeps raw evidence and caps only finalized payroll attend
   assert.match(migration, /finalized_break_minutes=v_break/)
   assert.match(migration, /auto_resolution_code='missing_checkout_scheduled_cap'/)
   assert.match(migration, /No unverified overtime is credited/)
-  assert.doesNotMatch(migration, /set[\s\S]{0,500}check_out_at=v_cap/)
+  assert.doesNotMatch(migration, /\n\s*check_out_at\s*=\s*v_cap/)
 })
 
 test('system issues and genuinely ambiguous records remain Owner exceptions', () => {
