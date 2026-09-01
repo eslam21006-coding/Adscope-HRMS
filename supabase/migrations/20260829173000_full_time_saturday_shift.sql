@@ -1,5 +1,5 @@
--- Full-time Saturday schedule exception effective 2026-08-29.
--- Saturday is a scheduled workday for full-time employees from 12:00 to 21:00
+-- Adscope full-time Saturday schedule exception effective 2026-08-29.
+-- Saturday is a scheduled workday for full-time Adscope employees from 12:00 to 21:00
 -- with a 60-minute scheduled break (8 required working hours).
 -- Early check-in remains allowed; lateness is measured from 12:00 using the
 -- employee's existing shift grace period.
@@ -17,6 +17,7 @@ declare
   v_day uuid;
   v_workday boolean;
   v_is_holiday boolean;
+  v_is_adscope boolean;
   v_is_full_time_saturday boolean;
   v_dow integer := extract(dow from p_date)::integer;
   v_scheduled_start time without time zone;
@@ -27,6 +28,11 @@ begin
   select * into v_employee from public.employees where id = p_employee;
   if not found then raise exception 'Employee not found'; end if;
   if app_private.is_locked_period(v_employee.organization_id, p_date) then raise exception 'Payroll period is locked'; end if;
+
+  select exists(
+    select 1 from public.organizations o
+    where o.id=v_employee.organization_id and o.code='ADSCOPE'
+  ) into v_is_adscope;
 
   select id into v_period
   from public.payroll_periods
@@ -58,7 +64,8 @@ begin
       and h.holiday_date = p_date
   ) into v_is_holiday;
 
-  v_is_full_time_saturday := v_employee.employment_type = 'full_time'
+  v_is_full_time_saturday := v_is_adscope
+    and v_employee.employment_type = 'full_time'
     and p_date >= date '2026-08-29'
     and v_dow = 6;
 
@@ -133,6 +140,7 @@ begin
     status = case
       when public.attendance_days.check_in_at is null
         and public.attendance_days.check_out_at is null
+        and not coalesce(public.attendance_days.requires_owner_review,false)
         and coalesce(public.attendance_days.status_override, public.attendance_days.status) = 'weekend'::public.attendance_status
       then excluded.status
       else public.attendance_days.status
@@ -150,9 +158,9 @@ end;
 $function$;
 
 comment on function app_private.ensure_attendance_day(uuid, date) is
-  'Generates attendance days from the assigned shift, with a full-time Saturday exception from 2026-08-29 of 12:00-21:00, a 60-minute scheduled break and 8 required hours. Approved date-specific permissions are preserved.';
+  'Generates attendance days from the assigned shift, with an Adscope-only full-time Saturday exception from 2026-08-29 of 12:00-21:00, a 60-minute scheduled break and 8 required hours. Approved date-specific permissions are preserved.';
 
--- Correct already-generated Saturday rows from the effective date onward,
+-- Correct already-generated Adscope Saturday rows from the effective date onward,
 -- including an open/closed current-day session, while preserving raw events,
 -- approved leave and approved date-specific schedule permissions.
 update public.attendance_days ad
@@ -219,6 +227,7 @@ set
   end,
   updated_at = now()
 from public.employees e
+join public.organizations o on o.id=e.organization_id and o.code='ADSCOPE'
 where e.id = ad.employee_id
   and e.employment_type = 'full_time'
   and ad.attendance_date >= date '2026-08-29'
@@ -232,7 +241,7 @@ where e.id = ad.employee_id
       and h.holiday_date = ad.attendance_date
   );
 
--- Recalculate any affected Saturday records from their preserved attendance events
+-- Recalculate affected Adscope Saturday records from preserved attendance events
 -- so late minutes, worked minutes and overtime use the new Saturday schedule.
 do $block$
 declare
@@ -242,6 +251,7 @@ begin
     select ad.id
     from public.attendance_days ad
     join public.employees e on e.id = ad.employee_id
+    join public.organizations o on o.id=e.organization_id and o.code='ADSCOPE'
     where e.employment_type = 'full_time'
       and ad.attendance_date >= date '2026-08-29'
       and extract(dow from ad.attendance_date)::integer = 6
