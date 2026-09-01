@@ -21,6 +21,11 @@ test('expired missed check-ins finalize attendance but not discipline', () => {
   assert.doesNotMatch(migration, /workflow_status[\s\S]*'final'[\s\S]*auto_missed_check_in_absence/)
 })
 
+test('migration-time execution never creates a draft with a null actor', () => {
+  assert.match(migration, /v_type is not null[\s\S]*auth\.uid\(\)\) is not null[\s\S]*insert into public\.violations/)
+  assert.doesNotMatch(migration, /pp\.month_start=date '2026-08-01'/)
+})
+
 test('missing checkout keeps raw evidence and caps only finalized payroll attendance', () => {
   assert.match(migration, /d\.check_out_at is not null[\s\S]*return false/)
   assert.match(migration, /finalized_check_in_at=d\.check_in_at/)
@@ -29,6 +34,21 @@ test('missing checkout keeps raw evidence and caps only finalized payroll attend
   assert.match(migration, /auto_resolution_code='missing_checkout_scheduled_cap'/)
   assert.match(migration, /No unverified overtime is credited/)
   assert.doesNotMatch(migration, /\n\s*check_out_at\s*=\s*v_cap/)
+})
+
+test('missing checkout auto-cap applies only to scheduled workdays', () => {
+  assert.match(migration, /or not d\.scheduled_workday[\s\S]*return false/)
+})
+
+test('pre-existing ambiguous review sessions remain quarantined', () => {
+  assert.match(migration, /if d\.session_state='needs_review' or d\.requires_owner_review then/)
+  assert.match(migration, /coalesce\(d\.status_override,d\.status\)<>'missing_checkout'/)
+  assert.match(migration, /d\.review_reason not ilike 'Missing checkout:%'/)
+})
+
+test('pending same-day permission or leave prevents checkout auto-cap', () => {
+  assert.match(migration, /permission_requests[\s\S]*pr\.request_date=d\.attendance_date[\s\S]*pr\.status='pending'[\s\S]*return false/)
+  assert.match(migration, /leave_requests[\s\S]*lr\.status in \('draft','pending'\)[\s\S]*return false/)
 })
 
 test('system issues and genuinely ambiguous records remain Owner exceptions', () => {
@@ -85,9 +105,7 @@ test('test employee is deactivated rather than deleted', () => {
   assert.doesNotMatch(migration, /delete from public\.employees/i)
 })
 
-test('August cleanup applies defaults without touching system issues', () => {
-  assert.match(migration, /pp\.month_start=date '2026-08-01'/)
-  assert.match(migration, /pp\.status='open'/)
-  assert.match(migration, /perform app_private\.apply_elapsed_attendance_defaults/)
+test('readiness applies elapsed defaults but system issues are excluded', () => {
+  assert.match(hardening, /v_defaults:=app_private\.apply_elapsed_attendance_defaults/)
   assert.match(migration, /not ad\.system_issue/)
 })
