@@ -29,6 +29,13 @@ begin
     return new;
   end if;
 
+  -- Attendance generation can legitimately insert a non-workday row for a
+  -- full-time employee who has no effective shift. Do not convert that row
+  -- into a Saturday workday without a shift assignment.
+  if new.shift_id is null then
+    return new;
+  end if;
+
   select exists (
     select 1
     from public.official_holidays h
@@ -64,4 +71,4 @@ for each row
 execute function app_private.apply_full_time_saturday_schedule_on_insert();
 
 comment on function app_private.apply_full_time_saturday_schedule_on_insert() is
-  'Normalizes newly inserted full-time Saturday attendance rows to 12:00-21:00 with a 60-minute break from 2026-08-29 onward; official holidays remain unchanged.';
+  'Normalizes newly inserted full-time Saturday attendance rows with an effective shift to 12:00-21:00 with a 60-minute break from 2026-08-29 onward; official holidays and no-shift rows remain unchanged.';
