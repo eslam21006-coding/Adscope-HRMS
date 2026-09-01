@@ -4,7 +4,8 @@ import { test } from 'node:test'
 
 const migration = readFileSync(new URL('../supabase/migrations/20260901131500_automate_attendance_month_end.sql', import.meta.url), 'utf8')
 const hardening = readFileSync(new URL('../supabase/migrations/20260901133000_attendance_autoresolve_hardening.sql', import.meta.url), 'utf8')
-const finalSql = `${migration}\n${hardening}`
+const ownerNotice = readFileSync(new URL('../supabase/migrations/20260901133500_attendance_autoresolve_owner_notice.sql', import.meta.url), 'utf8')
+const finalSql = `${migration}\n${hardening}\n${ownerNotice}`
 
 test('missed check-ins wait for a 24-hour employee correction window', () => {
   assert.match(migration, /return v_shift_end\+interval '24 hours'/)
@@ -19,6 +20,13 @@ test('expired missed check-ins finalize attendance but not discipline', () => {
   assert.match(migration, /workflow_status,created_by[\s\S]*'draft'/)
   assert.match(migration, /Any disciplinary sanction still requires Owner review/)
   assert.doesNotMatch(migration, /workflow_status[\s\S]*'final'[\s\S]*auto_missed_check_in_absence/)
+})
+
+test('Owners are informed when an absence is auto-resolved without creating payroll work', () => {
+  assert.match(ownerNotice, /auto_resolution_code='missed_check_in_absence'/)
+  assert.match(ownerNotice, /perform app_private\.notify_owners/)
+  assert.match(ownerNotice, /No payroll action is required/)
+  assert.match(ownerNotice, /disciplinary decision remains a separate Owner-reviewed draft/)
 })
 
 test('migration-time execution never creates a draft with a null actor', () => {
