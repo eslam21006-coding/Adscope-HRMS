@@ -6,12 +6,17 @@ const migration = readFileSync(new URL('../supabase/migrations/20260829173000_fu
 const generationGuard = readFileSync(new URL('../supabase/migrations/20260829173500_full_time_saturday_generation_guard.sql', import.meta.url), 'utf8')
 const actionMigration = readFileSync(new URL('../supabase/migrations/20260812100500_attendance_session_actions.sql', import.meta.url), 'utf8')
 
-test('full-time employees use the Saturday 12pm to 9pm schedule', () => {
-  assert.match(migration, /employment_type = 'full_time' and v_dow = 6/)
+test('full-time employees use the Saturday 12pm to 9pm schedule from the effective date', () => {
+  assert.match(migration, /employment_type = 'full_time'[\s\S]*p_date >= date '2026-08-29'[\s\S]*v_dow = 6/)
   assert.match(migration, /time '12:00:00'/)
   assert.match(migration, /time '21:00:00'/)
   assert.match(migration, /v_scheduled_break_minutes := case[\s\S]*then 60/)
   assert.match(migration, /v_required_hours := case[\s\S]*then 8/)
+})
+
+test('dates before 29 August 2026 do not receive the Saturday exception', () => {
+  assert.match(migration, /p_date >= date '2026-08-29'/)
+  assert.match(generationGuard, /new\.attendance_date < date '2026-08-29'[\s\S]*return new/)
 })
 
 test('Saturday becomes a workday for full-time employees but official holidays still win', () => {
@@ -30,12 +35,23 @@ test('early check-in remains allowed before the Saturday scheduled start', () =>
   assert.doesNotMatch(actionMigration, /too early to check in/i)
 })
 
-test('already-generated Saturdays from 2026-08-29 are corrected and recalculated', () => {
+test('already-generated Saturdays from 2026-08-29 are corrected and recalculated only with an effective shift', () => {
   assert.match(migration, /attendance_date >= date '2026-08-29'/)
-  assert.match(migration, /scheduled_start = time '12:00:00'/)
-  assert.match(migration, /scheduled_end = time '21:00:00'/)
-  assert.match(migration, /session_expires_at = case[\s\S]*attendance_session_expiry[\s\S]*time '21:00:00'/)
+  assert.match(migration, /app_private\.effective_shift\(e\.id, ad\.attendance_date\) is not null/)
+  assert.match(migration, /scheduled_start = case[\s\S]*time '12:00:00'/)
+  assert.match(migration, /scheduled_end = case[\s\S]*time '21:00:00'/)
+  assert.match(migration, /session_expires_at = case[\s\S]*attendance_session_expiry/)
   assert.match(migration, /perform app_private\.recompute_attendance_day\(r\.id\)/)
+})
+
+test('approved date-specific permissions are preserved during the Saturday backfill', () => {
+  assert.match(migration, /request_type = 'late_start'[\s\S]*status = 'approved'[\s\S]*then ad\.scheduled_start/)
+  assert.match(migration, /request_type = 'early_leave'[\s\S]*status = 'approved'[\s\S]*then ad\.scheduled_end/)
+})
+
+test('approved leave is not reset to not started during Saturday correction', () => {
+  assert.match(migration, /coalesce\(ad\.status_override, ad\.status\) = 'weekend'::public\.attendance_status[\s\S]*then 'not_started'/)
+  assert.doesNotMatch(migration, /coalesce\(ad\.status_override, ad\.status\) in \([^)]*leave[^)]*\)[\s\S]*then 'not_started'/i)
 })
 
 test('future generated attendance rows are normalized on insert', () => {
@@ -48,6 +64,10 @@ test('future generated attendance rows are normalized on insert', () => {
   assert.match(generationGuard, /new\.scheduled_break_minutes := 60/)
   assert.match(generationGuard, /new\.required_hours := 8/)
   assert.match(generationGuard, /if v_is_holiday then[\s\S]*return new/)
+})
+
+test('generation guard leaves no-shift Saturday rows as non-workdays', () => {
+  assert.match(generationGuard, /if new\.shift_id is null then[\s\S]*return new/)
 })
 
 test('generation guard does not override later Owner-approved schedule updates', () => {
