@@ -1,17 +1,17 @@
-import { readFileSync } from 'node:fs';
-import { gunzipSync } from 'node:zlib';
-
-const sql = readFileSync('supabase/migrations/20260812102000_compiled_attendance_session_portal.sql', 'utf8');
-const parts = [...sql.matchAll(/values \('attendance',\d+,\$payload\$([\s\S]*?)\$payload\$/g)].map(match => match[1]);
-if (!parts.length) throw new Error('No attendance bundle parts found');
-const encoded = parts.join('');
-const html = gunzipSync(Buffer.from(encoded, 'base64')).toString('utf8');
-for (const name of ['submit_permission_request','submit_leave_request','submit_advance_request','submit_violation_response']) {
-  const index = html.indexOf(name);
-  console.log(`\n===== ${name} =====`);
-  if (index < 0) {
-    console.log('NOT FOUND');
-    continue;
+const supabaseUrl = 'https://fazvuuwgahuxacvgyslf.supabase.co';
+const key = 'sb_publishable_F7S5nEal7qghrczR7v0k8A_6GEPMbDq';
+const response = await fetch(`${supabaseUrl}/rest/v1/`, {
+  headers: {
+    apikey: key,
+    Authorization: `Bearer ${key}`,
+    Accept: 'application/openapi+json'
   }
-  console.log(html.slice(Math.max(0, index - 700), Math.min(html.length, index + 1400)));
+});
+console.log('OpenAPI status:', response.status);
+if (!response.ok) throw new Error(`OpenAPI request failed: ${response.status}`);
+const schema = await response.json();
+for (const name of ['submit_permission_request','submit_leave_request','submit_advance_request','submit_violation_response']) {
+  console.log(`\n===== ${name} =====`);
+  const path = schema.paths?.[`/rpc/${name}`];
+  console.log(path ? JSON.stringify(path, null, 2) : 'NOT FOUND');
 }
