@@ -7,8 +7,12 @@ const response = await fetch(`${supabaseUrl}/rest/v1/`, {
   }
 });
 console.log('OpenAPI status:', response.status);
-if (!response.ok) throw new Error(`OpenAPI request failed: ${response.status}`);
-const schema = await response.json();
+const text = await response.text();
+if (!response.ok) {
+  console.log('OpenAPI error body:', text);
+  throw new Error(`OpenAPI request failed: ${response.status}`);
+}
+const schema = JSON.parse(text);
 for (const name of ['submit_permission_request','submit_leave_request','submit_advance_request','submit_violation_response']) {
   console.log(`\n===== ${name} =====`);
   const path = schema.paths?.[`/rpc/${name}`];
