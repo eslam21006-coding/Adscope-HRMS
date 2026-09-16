@@ -3,7 +3,6 @@ const key = 'sb_publishable_F7S5nEal7qghrczR7v0k8A_6GEPMbDq';
 const response = await fetch(`${supabaseUrl}/rest/v1/`, {
   headers: {
     apikey: key,
-    Authorization: `Bearer ${key}`,
     Accept: 'application/openapi+json'
   }
 });
