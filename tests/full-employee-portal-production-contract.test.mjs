@@ -52,7 +52,15 @@ test('history queries are ordered before limit for supported tables', () => {
 
 test('advance month default follows organization timezone', () => {
   assert.match(compat, /installTimezoneAwareAdvanceDefault/);
-  assert.match(compat, /timeZone, year: 'numeric', month: '2-digit'/);
+  assert.match(compat, /formatToParts/);
+  assert.match(compat, /input\.value = `\$\{parts\.year\}-\$\{parts\.month\}`/);
+});
+
+test('notifications fall back from employee identity to signed-in user identity', () => {
+  assert.match(compat, /wrapNotificationQuery/);
+  assert.match(compat, /employeeFilter/);
+  assert.match(compat, /\.eq\('user_id', getUserId\(\)\)/);
+  assert.match(compat, /currentUserId = result\?\.data\?\.session\?\.user\?\.id/);
 });
 
 test('ordinary violation responses cannot fall through to an appeal-only RPC', () => {
