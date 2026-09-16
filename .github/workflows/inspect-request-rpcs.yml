@@ -16,5 +16,9 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - name: Decode historical employee portal request calls
+      - name: Probe live request RPC parameter names
         run: node scripts/inspect-request-rpcs.mjs
+      - name: Inspect checked-in request function definitions and grants
+        shell: bash
+        run: |
+          rg -n -C 35 --glob '*.sql' 'submit_permission_request|submit_leave_request|submit_advance_request|submit_violation_response|grant execute.*submit_|revoke.*submit_' supabase/migrations || true
