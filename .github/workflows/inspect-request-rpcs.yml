@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - fix/request-submit-contract
+  pull_request:
+    branches:
+      - main
 
 jobs:
   inspect:
