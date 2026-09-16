@@ -49,12 +49,8 @@
     const date = new Date(value);
     if (Number.isNaN(date.getTime())) return null;
     return {
-      year: date.getFullYear(),
-      month: date.getMonth() + 1,
-      day: date.getDate(),
-      hour: date.getHours(),
-      minute: date.getMinutes(),
-      second: date.getSeconds()
+      year: date.getFullYear(), month: date.getMonth() + 1, day: date.getDate(),
+      hour: date.getHours(), minute: date.getMinutes(), second: date.getSeconds()
     };
   }
 
@@ -114,13 +110,63 @@
     });
   }
 
+  function wrapNotificationQuery(builder, originalFrom, getUserId, state = {}) {
+    if (!builder || typeof builder !== 'object') return builder;
+    return new Proxy(builder, {
+      get(target, property) {
+        const value = Reflect.get(target, property, target);
+
+        if (property === 'then') {
+          return (onFulfilled, onRejected) => {
+            const execute = async () => {
+              const first = await target;
+              if (first?.error || first?.data?.length || !state.employeeFilter || !getUserId()) return first;
+
+              let fallback = originalFrom('notifications').select(...(state.selectArgs || ['*'])).eq('user_id', getUserId()).order('created_at', { ascending: false });
+              if (state.limit != null) fallback = fallback.limit(state.limit);
+              const second = await fallback;
+              return !second?.error && second?.data?.length ? second : first;
+            };
+            return execute().then(onFulfilled, onRejected);
+          };
+        }
+
+        if (property === 'select' && typeof value === 'function') {
+          return (...args) => wrapNotificationQuery(value.apply(target, args), originalFrom, getUserId, { ...state, selectArgs: args });
+        }
+
+        if (property === 'eq' && typeof value === 'function') {
+          return (column, eqValue) => wrapNotificationQuery(value.call(target, column, eqValue), originalFrom, getUserId, {
+            ...state,
+            employeeFilter: column === 'employee_id' ? eqValue : state.employeeFilter
+          });
+        }
+
+        if (property === 'limit' && typeof value === 'function') {
+          return limit => wrapNotificationQuery(target.order('created_at', { ascending: false }).limit(limit), originalFrom, getUserId, { ...state, limit });
+        }
+
+        if (typeof value === 'function') {
+          return (...args) => {
+            const result = value.apply(target, args);
+            return result && typeof result === 'object'
+              ? wrapNotificationQuery(result, originalFrom, getUserId, state)
+              : result;
+          };
+        }
+        return value;
+      }
+    });
+  }
+
   function installTimezoneAwareAdvanceDefault(timeZone) {
     const apply = () => {
       const input = document.querySelector('#advanceForm input[name="month"]');
       if (!input || input.dataset.adscopeTimezoneDefault === '1') return;
-      input.value = new Intl.DateTimeFormat('en-CA', {
+      const parts = Object.fromEntries(new Intl.DateTimeFormat('en-CA', {
         timeZone, year: 'numeric', month: '2-digit'
-      }).format(new Date());
+      }).formatToParts(new Date()).filter(part => part.type !== 'literal').map(part => [part.type, part.value]));
+      input.value = `${parts.year}-${parts.month}`;
       input.dataset.adscopeTimezoneDefault = '1';
     };
     const observer = new MutationObserver(apply);
@@ -134,7 +180,15 @@
     const client = originalCreateClient(...args);
     const originalRpc = client.rpc.bind(client);
     const originalFrom = client.from.bind(client);
+    const originalGetSession = client.auth.getSession.bind(client.auth);
     let currentEmployeeId = null;
+    let currentUserId = null;
+
+    client.auth.getSession = async (...sessionArgs) => {
+      const result = await originalGetSession(...sessionArgs);
+      currentUserId = result?.data?.session?.user?.id || currentUserId;
+      return result;
+    };
 
     const rememberEmployee = data => {
       const id = data?.employee_id || data?.id || data?.employee?.id || null;
@@ -144,7 +198,9 @@
 
     client.from = function from(table) {
       const mapped = table === 'advance_requests' ? 'advances' : table;
-      return wrapQuery(originalFrom(mapped), mapped);
+      const raw = originalFrom(mapped);
+      if (mapped === 'notifications') return wrapNotificationQuery(raw, originalFrom, () => currentUserId);
+      return wrapQuery(raw, mapped);
     };
 
     client.rpc = async function rpc(name, payload = {}) {
@@ -156,7 +212,7 @@
         try {
           const portalProfile = await originalRpc('get_my_employee_portal_profile', {});
           if (!portalProfile.error && portalProfile.data) {
-            merged = { ...merged, ...portalProfile.data };
+            merged = { ...portalProfile.data, ...merged };
             rememberEmployee(merged);
           }
         } catch {
@@ -226,10 +282,7 @@
         if (violationIntent.get(String(p.p_violation_id)) !== 'appeal') {
           return {
             data: null,
-            error: {
-              code: 'PGRST202',
-              message: 'Appeal-only workflow was not selected for this response.'
-            }
+            error: { code: 'PGRST202', message: 'Appeal-only workflow was not selected for this response.' }
           };
         }
       }
