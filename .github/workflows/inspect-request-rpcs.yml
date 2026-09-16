@@ -1,0 +1,17 @@
+name: Inspect request RPC contract
+
+on:
+  push:
+    branches:
+      - fix/request-submit-contract
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Decode historical employee portal request calls
+        run: node scripts/inspect-request-rpcs.mjs
