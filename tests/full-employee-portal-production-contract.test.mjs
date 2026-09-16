@@ -30,11 +30,35 @@ test('employee self-service RPCs use production parameter names and employee sco
   assert.match(compat, /p_deduction_month/);
 });
 
-test('violation response sends only the supported production arguments', () => {
-  const section = compat.slice(compat.indexOf("name === 'submit_violation_response'"));
-  assert.match(section, /p_violation_id/);
-  assert.match(section, /p_response/);
-  assert.doesNotMatch(section.split('return originalRpc(name, payload)')[0], /p_response_type/);
+test('request retries reuse the same in-flight production RPC instead of creating duplicates', () => {
+  assert.match(compat, /const requestCache = new Map\(\)/);
+  assert.match(compat, /REQUEST_DEDUPE_MS = 120000/);
+  assert.match(compat, /return cached\.promise/);
+  assert.match(compat, /dedupedRpc\(originalRpc, name, normalized\)/);
+});
+
+test('attendance correction wall-clock values are reinterpreted in the organization timezone', () => {
+  assert.match(compat, /normalizeCorrectionTimestamp/);
+  assert.match(compat, /wallClockToZoneIso/);
+  assert.match(compat, /window\.ADSCOPE_CONFIG\?\.timezone \|\| 'Africa\/Cairo'/);
+});
+
+test('history queries are ordered before limit for supported tables', () => {
+  assert.match(compat, /attendance_days: 'attendance_date'/);
+  assert.match(compat, /permission_requests: 'created_at'/);
+  assert.match(compat, /advances: 'created_at'/);
+  assert.match(compat, /target\.order\(orderColumns\[table\], \{ ascending: false \}\)\.limit\(limit\)/);
+});
+
+test('advance month default follows organization timezone', () => {
+  assert.match(compat, /installTimezoneAwareAdvanceDefault/);
+  assert.match(compat, /timeZone, year: 'numeric', month: '2-digit'/);
+});
+
+test('ordinary violation responses cannot fall through to an appeal-only RPC', () => {
+  assert.match(compat, /const violationIntent = new Map\(\)/);
+  assert.match(compat, /p\.p_response_type \|\| 'response'/);
+  assert.match(compat, /Appeal-only workflow was not selected for this response/);
 });
 
 test('richer Employee Portal profile is optional and attendance remains the boot authority', () => {
