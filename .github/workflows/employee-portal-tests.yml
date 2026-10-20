@@ -1,0 +1,39 @@
+name: HRMS Regression Tests
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  employee-request:
+    name: Employee request regression
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Verify self-service request contract and safe errors
+        run: node --test tests/employee-self-service-rpc.test.mjs tests/employee-request-safe-errors.test.mjs tests/full-employee-portal-production-contract.test.mjs
+
+  full-regression:
+    name: Full HRMS regression (legacy suite included)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Run all tests, including legacy portal tests
+        run: npm test

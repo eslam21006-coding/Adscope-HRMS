@@ -100,6 +100,23 @@
     if (/invalid login credentials/i.test(raw)) return 'The email or password is incorrect.';
     if (/email not confirmed/i.test(raw)) return 'Please confirm your email address before signing in.';
     if (/origin not allowed/i.test(raw)) return 'This Employee Portal page is not authorized yet. Contact an Owner.';
+    // Only render fixed, reviewed messages. Never show arbitrary provider/database text.
+    if (/Only an Owner can (?:submit a request for another employee|submit an advance for another employee|create leave for another employee)/i.test(raw)) return 'Your account cannot submit this request. Contact an Owner if the issue continues.';
+    if (/Active employee not found/i.test(raw)) return 'Your employee record is not active or linked correctly. Contact an Owner.';
+    if (/Requested start time is required/i.test(raw)) return 'Select the requested start time.';
+    if (/Requested leave time is required/i.test(raw)) return 'Select the requested end time.';
+    if (/Date and reason are required|Reason is required/i.test(raw)) return 'Select a date and enter a reason.';
+    if (/Enter a corrected check-in or check-out time/i.test(raw)) return 'Enter at least one corrected attendance time.';
+    if (/Enter a valid leave date range/i.test(raw)) return 'Select valid leave dates, with the end date on or after the start date.';
+    if (/The selected period contains no scheduled workdays/i.test(raw)) return 'The chosen dates do not include a scheduled working day.';
+    if (/Paid vacation becomes available after/i.test(raw)) return 'Paid vacation is not yet available under the employment eligibility policy.';
+    if (/Emergency leave is limited to/i.test(raw)) return 'This emergency leave request exceeds the company limit.';
+    if (/Another pending or approved leave overlaps these dates/i.test(raw)) return 'A pending or approved leave request already covers these dates.';
+    if (/Leave type is not available/i.test(raw)) return 'The selected leave type is not available.';
+    if (/Advance amount must be greater than zero/i.test(raw)) return 'Enter an advance amount greater than zero.';
+    if (/Deduction month must be the first day of a month/i.test(raw)) return 'Select a valid payroll deduction month.';
+    if (/Unsupported currency/i.test(raw)) return 'The selected currency is not supported.';
+    if (/PGRST202|could not find the function|schema cache/i.test(raw) || error?.code === 'PGRST202') return 'The request service is temporarily unavailable. Contact an Owner if it persists.';
     if (/permission denied|not authorized|row-level security/i.test(raw)) return 'You do not have permission to perform this action.';
     if (/jwt.*expired|token.*expired|session.*expired/i.test(raw)) return 'Your session has expired. Sign in again and repeat the action.';
     if (/already exists|duplicate/i.test(raw)) return 'This request appears to have already been submitted.';
