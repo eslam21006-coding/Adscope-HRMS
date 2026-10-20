@@ -216,6 +216,7 @@
 
       if (name === 'submit_permission_request') {
         const p = payload || {};
+        // The server resolves the employee from auth; a supplied employee ID is Owner-only.
         const normalized = {
           p_request_type: p.p_request_type || p.p_type || p.p_permission_type || null,
           p_request_date: p.p_request_date || p.p_date || null,
@@ -229,8 +230,7 @@
           p_corrected_check_out: normalizeCorrectionTimestamp(
             p.p_corrected_check_out || p.p_corrected_check_out_at || p.p_check_out_at || null,
             window.ADSCOPE_CONFIG?.timezone || 'Africa/Cairo'
-          ),
-          // The server resolves the authenticated employee; explicit employee IDs are Owner-only.
+          )
         };
         return dedupedRpc(originalRpc, name, normalized);
       }
@@ -254,7 +254,7 @@
           p_amount: p.p_amount,
           p_currency: p.p_currency,
           p_deduction_month: p.p_deduction_month || p.p_payroll_month || p.p_selected_month || null,
-          p_reason: p.p_reason || null,
+          p_reason: p.p_reason || null
         };
         return dedupedRpc(originalRpc, name, normalized);
       }
