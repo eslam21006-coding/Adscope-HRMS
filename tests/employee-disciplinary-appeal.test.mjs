@@ -66,7 +66,11 @@ test('an appeal failure does not fall back to an ordinary response', async () =>
 });
 
 test('migration scopes appeal privilege to the existing server-checked function', () => {
-  assert.match(migration, /ALTER FUNCTION public\.submit_disciplinary_appeal\(uuid, text, jsonb\) SECURITY DEFINER/);
+  assert.match(migration, /CREATE OR REPLACE FUNCTION public\.submit_disciplinary_appeal/);
+  assert.match(migration, /SECURITY DEFINER/);
+  assert.match(migration, /v\.appeal_deadline_at IS NULL OR NOW\(\) > v\.appeal_deadline_at/);
+  assert.match(migration, /FROM anon;/);
+  assert.match(migration, /recipient_user_id|employee_id = v_emp/);
   assert.match(migration, /REVOKE ALL ON FUNCTION public\.submit_disciplinary_appeal/);
   assert.doesNotMatch(migration, /DISABLE ROW LEVEL SECURITY|CREATE POLICY/i);
 });
@@ -75,4 +79,29 @@ test('device clock cannot block a timely appeal; server checks the deadline', ()
   assert.match(portal, /item\.workflow_status === 'notified' \? '1' : '0'/);
   assert.doesNotMatch(portal, /Date\.parse\(item\.appeal_deadline_at\)/);
   assert.match(portal, /The 24-hour appeal period has expired/);
+});
+
+test('appeal eligibility uses case state, not an untrusted client device clock', async () => {
+  const start = portal.indexOf('async function renderViolations()');
+  const end = portal.indexOf('async function loadNotifications(', start);
+  assert.ok(start >= 0 && end > start);
+  const render = vm.runInNewContext(`${portal.slice(start, end)}\nrenderViolations`, {
+    ownRows: async () => ({
+      available: true,
+      data: [
+        { id: 'case-notified', workflow_status: 'notified', appeal_deadline_at: '2000-01-01T00:00:00Z' },
+        { id: 'case-review', workflow_status: 'under_review' },
+        { id: 'case-final', workflow_status: 'final' }
+      ]
+    }),
+    sortRows: rows => rows,
+    esc: value => String(value ?? ''),
+    badge: value => String(value ?? ''),
+    sectionUnavailable: value => value
+  });
+  const markup = await render();
+  assert.match(markup, /data-respond-violation="case-notified" data-appeal-allowed="1"/);
+  assert.match(markup, /data-respond-violation="case-review" data-appeal-allowed="0"/);
+  assert.doesNotMatch(markup, /data-respond-violation="case-final"/);
+  // The server, not device Date.now(), rejects cases past their appeal deadline.
 });
