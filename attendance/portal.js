@@ -332,15 +332,16 @@
     const [leaves, permissions, advances, violations, notifications] = await Promise.all([
       ownRows('leave_requests', 50), ownRows('permission_requests', 50), ownRows('advance_requests', 50), ownRows('violations', 50), loadNotifications(50)
     ]);
-    const pending = [...leaves.data, ...permissions.data, ...advances.data].filter(row => /pending|submitted|review/i.test(String(row.status || row.workflow_status || ''))).length;
-    const openViolations = violations.data.filter(row => !/final|rejected|closed/i.test(String(row.workflow_status || row.status || ''))).length;
-    const unread = notifications.data.filter(row => !(row.is_read ?? row.read ?? row.read_at)).length;
+    const pendingKnown = leaves.available && permissions.available && advances.available;
+    const pending = pendingKnown ? [...leaves.data, ...permissions.data, ...advances.data].filter(row => /pending|submitted|review/i.test(String(row.status || row.workflow_status || ''))).length : null;
+    const openViolations = violations.available ? violations.data.filter(row => !/final|rejected|closed/i.test(String(row.workflow_status || row.status || ''))).length : null;
+    const unread = notifications.available ? notifications.data.filter(row => !(row.is_read ?? row.read ?? row.read_at)).length : null;
     const state = currentState();
     const shift = attendance?.shift || profile?.shift || {};
     return `<div class="grid three">
       <div class="metric"><span>Attendance</span><strong>${esc(state.replaceAll('-', ' '))}</strong></div>
-      <div class="metric"><span>Pending requests</span><strong>${pending}</strong></div>
-      <div class="metric"><span>Unread notifications</span><strong>${unread}</strong></div>
+      <div class="metric"><span>Pending requests</span><strong>${pending === null ? '—' : pending}</strong></div>
+      <div class="metric"><span>Unread notifications</span><strong>${unread === null ? '—' : unread}</strong></div>
     </div>
     <div class="grid two" style="margin-top:16px">
       <section class="panel"><header class="panel-head"><div><h2>Today</h2><p>${esc(attendance?.shift_date || localDate())}</p></div>${badge(state)}</header><div class="panel-body">
@@ -350,7 +351,8 @@
       <section class="panel"><header class="panel-head"><div><h2>Needs attention</h2><p>Your current HRMS items</p></div></header><div class="panel-body">
         ${attendance?.previous_review ? `<div class="notice"><strong>Attendance correction needed</strong><p>${esc(attendance.previous_review.attendance_date)} — ${esc(attendance.previous_review.reason || 'A previous record needs review.')}</p></div>` : ''}
         ${openViolations ? `<div class="notice"><strong>${openViolations} open violation ${openViolations === 1 ? 'case' : 'cases'}</strong><p>Open Violations to view the notice and response status.</p></div>` : ''}
-        ${!attendance?.previous_review && !openViolations ? '<div class="notice success"><strong>No urgent items</strong><p>No attendance correction or open violation is currently flagged here.</p></div>' : ''}
+        ${!violations.available ? '<div class="notice"><strong>Some alerts could not be checked</strong><p>Open Violations or refresh this page to try again.</p></div>' : ''}
+        ${!attendance?.previous_review && violations.available && openViolations === 0 ? '<div class="notice success"><strong>No urgent items</strong><p>No attendance correction or open violation is currently flagged here.</p></div>' : ''}
       </div></section>
     </div>`;
   }
@@ -422,24 +424,17 @@
   }
 
   async function loadNotifications(limit = 100) {
-    const id = employeeId();
     const uid = session?.user?.id;
-    if (!id && !uid) return { data: [], available: false };
-    const attempts = [];
-    if (id) attempts.push(() => client.from('notifications').select('*').eq('employee_id', id).limit(limit));
-    if (uid) attempts.push(() => client.from('notifications').select('*').eq('user_id', uid).limit(limit));
-    for (const attempt of attempts) {
-      const result = await optionalQuery(attempt);
-      if (result.available) return result;
-    }
-    return { data: [], available: false };
+    if (!uid) return { data: [], available: false };
+    // Production notifications are recipient-scoped and RLS protects the signed-in user.
+    return optionalQuery(() => client.from('notifications').select('*').eq('recipient_user_id', uid).limit(limit));
   }
 
   async function renderNotifications() {
     const notifications = await loadNotifications(100);
     const rows = sortRows(notifications.data);
     if (!notifications.available) return `<section class="panel"><header class="panel-head"><div><h2>Notifications</h2><p>HRMS updates and Owner decisions.</p></div></header><div class="panel-body">${sectionUnavailable('Notifications could not be loaded. This does not affect attendance or your other portal sections.')}</div></section>`;
-    return `<section class="panel"><header class="panel-head"><div><h2>Notifications</h2><p>${rows.filter(row => !(row.is_read ?? row.read ?? row.read_at)).length} unread</p></div></header><div class="panel-body"><div class="stack">${rows.map(row => `<div class="detail"><span>${esc(dateTime(row.created_at || row.sent_at || row.updated_at))}</span><strong>${esc(row.title || row.subject || String(row.type || 'HRMS notification').replaceAll('_',' '))}</strong><p class="sub" style="margin:5px 0 0">${esc(row.message || row.body || row.text || '')}</p></div>`).join('') || '<div class="empty">No notifications yet.</div>'}</div></div></section>`;
+    return `<section class="panel"><header class="panel-head"><div><h2>Notifications</h2><p>${rows.filter(row => !(row.is_read ?? row.read ?? row.read_at)).length} unread</p></div></header><div class="panel-body"><div class="stack">${rows.map(row => `<div class="detail"><span>${esc(dateTime(row.created_at || row.sent_at || row.updated_at))}</span><strong>${esc(row.title || row.subject || String(row.type || 'HRMS notification').replaceAll('_',' '))}</strong><p class="sub" style="margin:5px 0 0">${esc(row.message || row.body || row.text || '')}</p>${row.is_read ? '' : `<button class="secondary" type="button" data-mark-notification-read="${esc(row.id)}">Mark as read</button>`}</div>`).join('') || '<div class="empty">No notifications yet.</div>'}</div></div></section>`;
   }
 
   async function renderProfile() {
@@ -465,6 +460,27 @@
     if (page === 'leave') bindLeave(content);
     if (page === 'advances') bindAdvances(content);
     if (page === 'violations') bindViolations(content);
+    if (page === 'notifications') bindNotifications(content);
+  }
+
+  function bindNotifications(content) {
+    content.querySelectorAll('[data-mark-notification-read]').forEach(button => {
+      button.onclick = async () => {
+        const id = button.dataset.markNotificationRead;
+        button.disabled = true;
+        button.textContent = 'Saving…';
+        try {
+          const result = await withTimeout(client.rpc('mark_notification_read', { p_notification_id: id }));
+          if (result.error) throw result.error;
+          toast('Notification marked as read.', 'success');
+          loadPage('notifications');
+        } catch (error) {
+          button.disabled = false;
+          button.textContent = 'Mark as read';
+          toast(friendlyError(error), 'error');
+        }
+      };
+    });
   }
 
   function bindAttendance(content) {
