@@ -25,7 +25,7 @@ test('employee self-service RPCs use production parameter names and employee sco
   assert.match(compat, /p_requested_end_time/);
   assert.match(compat, /p_corrected_check_in/);
   assert.match(compat, /p_corrected_check_out/);
-  assert.match(compat, /p_employee_id: currentEmployeeId/);
+  assert.doesNotMatch(compat, /p_employee_id\s*:/, 'employee self-service must rely on server identity');
   assert.match(compat, /p_document_path/);
   assert.match(compat, /p_deduction_month/);
 });
