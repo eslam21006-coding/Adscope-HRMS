@@ -61,7 +61,8 @@ test('notifications fall back from employee identity to signed-in user identity'
   assert.match(compat, /wrapNotificationQuery/);
   assert.match(compat, /employeeFilter/);
   assert.match(compat, /\.eq\('user_id', getUserId\(\)\)/);
-  assert.match(compat, /currentUserId = result\?\.data\?\.session\?\.user\?\.id/);
+  assert.match(compat, /const nextUserId = result\?\.data\?\.session\?\.user\?\.id/);
+  assert.match(compat, /currentUserId = nextUserId/);
 });
 
 test('ordinary violation responses cannot fall through to an appeal-only RPC', () => {
