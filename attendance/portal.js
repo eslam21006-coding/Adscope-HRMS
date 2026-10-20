@@ -417,7 +417,7 @@
 
   async function renderViolations() {
     const violations = await ownRows('violations', 100);
-    const rows = sortRows(violations.data).map(item => `<tr><td>${esc(item.violation_code || item.code || '—')}</td><td>${esc(item.violation_date || item.date || '—')}</td><td>${esc(String(item.violation_type || item.type_name || item.category || 'Violation').replaceAll('_',' '))}</td><td>${badge(item.workflow_status || item.status)}</td><td>${esc(item.description || item.allegation || item.reason || '')}</td><td>${item.workflow_status && !/final|rejected|closed/i.test(item.workflow_status) ? `<button class="secondary" data-respond-violation="${esc(item.id)}">Respond</button>` : '—'}</td></tr>`).join('');
+    const rows = sortRows(violations.data).map(item => `<tr><td>${esc(item.violation_code || item.code || '—')}</td><td>${esc(item.violation_date || item.date || '—')}</td><td>${esc(String(item.violation_type || item.type_name || item.category || 'Violation').replaceAll('_',' '))}</td><td>${badge(item.workflow_status || item.status)}</td><td>${esc(item.description || item.allegation || item.reason || '')}</td><td>${['notified', 'under_review'].includes(String(item.workflow_status || '').toLowerCase()) ? `<button class="secondary" data-respond-violation="${esc(item.id)}" data-appeal-allowed="${item.workflow_status === 'notified' && item.appeal_deadline_at && Date.parse(item.appeal_deadline_at) >= Date.now() ? '1' : '0'}">Respond / Appeal</button>` : '—'}</td></tr>`).join('');
     return `<section class="panel"><header class="panel-head"><div><h2>Violations & investigations</h2><p>You can view notices here and submit your response. Final sanctions remain subject to Owner review.</p></div></header>${violations.available ? `<div class="table-wrap"><table class="data-table"><thead><tr><th>Code</th><th>Date</th><th>Type</th><th>Status</th><th>Allegation</th><th>Action</th></tr></thead><tbody>${rows}</tbody></table>${rows ? '' : '<div class="empty">No violation notices are assigned to you.</div>'}</div>` : `<div class="panel-body">${sectionUnavailable('Violation records could not be loaded.')}</div>`}</section><div id="violationResponseHost"></div>`;
   }
 
@@ -613,7 +613,7 @@
   function bindViolations(content) {
     const host = content.querySelector('#violationResponseHost');
     content.querySelectorAll('[data-respond-violation]').forEach(button => button.onclick = () => {
-      host.innerHTML = `<section class="panel" style="margin-top:16px"><header class="panel-head"><div><h2>Respond to violation</h2><p>Your response is recorded for Owner review.</p></div></header><div class="panel-body"><form id="violationResponseForm" data-violation-id="${esc(button.dataset.respondViolation)}"><label class="field"><span>Your response / appeal</span><textarea name="response" required></textarea></label><label class="field"><span>Response type</span><select name="response_type"><option value="response">Response</option><option value="appeal">Appeal</option></select></label><button class="primary" type="submit">Submit response</button></form></div></section>`;
+      host.innerHTML = `<section class="panel" style="margin-top:16px"><header class="panel-head"><div><h2>Respond to violation</h2><p>Your response is recorded for Owner review.</p></div></header><div class="panel-body"><form id="violationResponseForm" data-violation-id="${esc(button.dataset.respondViolation)}"><label class="field"><span>Your response / appeal</span><textarea name="response" required></textarea></label><label class="field"><span>Response type</span><select name="response_type"><option value="response">Response</option><option value="appeal"${button.dataset.appealAllowed === '1' ? '' : ' disabled'}>Appeal</option></select></label><button class="primary" type="submit">Submit response</button></form></div></section>`;
       bindViolationResponse(host.querySelector('#violationResponseForm'));
       host.scrollIntoView({ behavior:'smooth', block:'nearest' });
     });
@@ -632,26 +632,19 @@
       const violationId = form.dataset.violationId;
       const responseText = fd.get('response');
       const responseType = fd.get('response_type');
-      const attempts = [
-        ['submit_violation_response', { p_violation_id:violationId,p_response:responseText,p_response_type:responseType }],
-        ['respond_to_violation', { p_violation_id:violationId,p_response:responseText,p_is_appeal:responseType === 'appeal' }],
-        ['submit_violation_appeal', { p_violation_id:violationId,p_reason:responseText }]
-      ];
+      // A disciplinary appeal has its own server workflow. Never record it as an ordinary response.
+      const isAppeal = responseType === 'appeal';
+      const name = isAppeal ? 'submit_disciplinary_appeal' : 'submit_violation_response';
+      const args = isAppeal
+        ? { p_violation_id: violationId, p_appeal_reason: responseText, p_evidence: [] }
+        : { p_violation_id: violationId, p_response: responseText };
       button.disabled = true;
       button.textContent = 'Submitting…';
-      let lastError = null;
       try {
-        for (const [name,args] of attempts) {
-          const result = await withTimeout(client.rpc(name,args));
-          if (!result.error) {
-            toast('Your response was submitted for Owner review.', 'success');
-            loadPage('violations');
-            return;
-          }
-          if (!isRpcMismatch(result.error)) throw result.error;
-          lastError = result.error;
-        }
-        throw lastError || new Error('Response service unavailable');
+        const result = await withTimeout(client.rpc(name, args));
+        if (result.error) throw result.error;
+        toast(isAppeal ? 'Appeal submitted for Owner review.' : 'Response submitted for Owner review.', 'success');
+        loadPage('violations');
       } catch (error) {
         button.disabled = false;
         button.textContent = 'Submit response';
