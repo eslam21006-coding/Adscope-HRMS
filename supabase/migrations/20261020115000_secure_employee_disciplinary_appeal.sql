@@ -52,7 +52,6 @@ BEGIN
     appeal_status = 'pending',
     workflow_status = 'under_review',
     appeal_reason = TRIM(p_appeal_reason),
-    employee_response = TRIM(p_appeal_reason),
     appeal_evidence = COALESCE(p_evidence, '[]'::jsonb),
     appeal_submitted_at = NOW(),
     updated_at = NOW()
