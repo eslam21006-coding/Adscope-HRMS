@@ -7,11 +7,13 @@ const compat = readFileSync(new URL('../attendance/portal-compat.js', import.met
 
 function createHarness() {
   const calls = [];
+  let userId = 'test-user';
   const client = {
     auth: {
       async getSession() {
-        return { data: { session: { user: { id: 'test-user' } } }, error: null };
-      }
+        return { data: { session: userId ? { user: { id: userId } } : null }, error: null };
+      },
+      async signOut() { userId = null; return { error: null }; }
     },
     from() { return {}; },
     async rpc(name, args = {}) {
@@ -34,7 +36,7 @@ function createHarness() {
   class MutationObserver { observe() {} }
 
   vm.runInNewContext(compat, { window, document, MutationObserver, Intl, Date, Map, Promise });
-  return { client: window.supabase.createClient('test-url', 'test-publishable'), calls };
+  return { client: window.supabase.createClient('test-url', 'test-publishable'), calls, setUserId(id) { userId = id; } };
 }
 
 async function signedInClient() {
@@ -92,4 +94,38 @@ test('employee leave and salary-advance RPCs also rely on authenticated server i
   assert.equal(advance.args.p_amount, 1000);
   assert.equal(Object.hasOwn(leave.args, 'p_employee_id'), false);
   assert.equal(Object.hasOwn(advance.args, 'p_employee_id'), false);
+});
+
+test('retry deduplication cannot reuse another authenticated employee submission', async () => {
+  const h = createHarness();
+  const payload = {
+    p_request_type: 'late_start',
+    p_request_date: '2026-10-25',
+    p_late_start_time: '11:30',
+    p_reason: 'same request text'
+  };
+  await h.client.auth.getSession();
+  await h.client.rpc('submit_permission_request', payload);
+  h.setUserId('a-different-employee');
+  await h.client.auth.getSession();
+  await h.client.rpc('submit_permission_request', payload);
+  const submissions = h.calls.filter(call => call.name === 'submit_permission_request');
+  assert.equal(submissions.length, 2, 'each authenticated employee must cause an independent RPC');
+});
+
+test('sign-out clears the cached request response before the next sign-in', async () => {
+  const h = createHarness();
+  const payload = {
+    p_request_type: 'early_leave',
+    p_request_date: '2026-10-26',
+    p_early_leave_time: '15:00',
+    p_reason: 'test'
+  };
+  await h.client.auth.getSession();
+  await h.client.rpc('submit_permission_request', payload);
+  await h.client.auth.signOut();
+  h.setUserId('another-user');
+  await h.client.auth.getSession();
+  await h.client.rpc('submit_permission_request', payload);
+  assert.equal(h.calls.filter(call => call.name === 'submit_permission_request').length, 2);
 });
