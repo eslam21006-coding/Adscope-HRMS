@@ -183,6 +183,16 @@
     const requestCache = new Map(); // No cached submission can cross clients or accounts.
     let currentUserId = null;
 
+    // Auth can change via sign-in/token events without an explicit getSession call.
+    // Never reuse a previous employee's request cache after an account transition.
+    if (typeof client.auth.onAuthStateChange === 'function') {
+      client.auth.onAuthStateChange((_event, nextSession) => {
+        const nextUserId = nextSession?.user?.id || null;
+        if (nextUserId !== currentUserId) requestCache.clear();
+        currentUserId = nextUserId;
+      });
+    }
+
     client.auth.getSession = async (...sessionArgs) => {
       const result = await originalGetSession(...sessionArgs);
       const nextUserId = result?.data?.session?.user?.id || null;
