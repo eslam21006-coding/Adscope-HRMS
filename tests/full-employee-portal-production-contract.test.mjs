@@ -34,7 +34,8 @@ test('request retries reuse the same in-flight production RPC instead of creatin
   assert.match(compat, /const requestCache = new Map\(\)/);
   assert.match(compat, /REQUEST_DEDUPE_MS = 120000/);
   assert.match(compat, /return cached\.promise/);
-  assert.match(compat, /dedupedRpc\(originalRpc, name, normalized\)/);
+  assert.match(compat, /dedupedRpc\(originalRpc, name, normalized, requestCache\)/);
+  assert.match(compat, /if \(nextUserId !== currentUserId\) requestCache\.clear\(\)/);
 });
 
 test('attendance correction wall-clock values are reinterpreted in the organization timezone', () => {
