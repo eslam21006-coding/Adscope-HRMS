@@ -181,19 +181,12 @@
     const originalRpc = client.rpc.bind(client);
     const originalFrom = client.from.bind(client);
     const originalGetSession = client.auth.getSession.bind(client.auth);
-    let currentEmployeeId = null;
     let currentUserId = null;
 
     client.auth.getSession = async (...sessionArgs) => {
       const result = await originalGetSession(...sessionArgs);
       currentUserId = result?.data?.session?.user?.id || currentUserId;
       return result;
-    };
-
-    const rememberEmployee = data => {
-      const id = data?.employee_id || data?.id || data?.employee?.id || null;
-      if (id) currentEmployeeId = id;
-      return data;
     };
 
     client.from = function from(table) {
@@ -207,13 +200,12 @@
       if (name === 'get_my_attendance_profile') {
         const attendanceProfile = await originalRpc(name, payload);
         if (attendanceProfile.error) return attendanceProfile;
-        let merged = rememberEmployee(attendanceProfile.data) || {};
+        let merged = attendanceProfile.data || {};
 
         try {
           const portalProfile = await originalRpc('get_my_employee_portal_profile', {});
           if (!portalProfile.error && portalProfile.data) {
             merged = { ...portalProfile.data, ...merged };
-            rememberEmployee(merged);
           }
         } catch {
           // Attendance profile remains sufficient for core portal boot.
@@ -238,7 +230,7 @@
             p.p_corrected_check_out || p.p_corrected_check_out_at || p.p_check_out_at || null,
             window.ADSCOPE_CONFIG?.timezone || 'Africa/Cairo'
           ),
-          p_employee_id: currentEmployeeId
+          // The server resolves the authenticated employee; explicit employee IDs are Owner-only.
         };
         return dedupedRpc(originalRpc, name, normalized);
       }
@@ -250,7 +242,7 @@
           p_start_date: p.p_start_date || p.p_from_date || null,
           p_end_date: p.p_end_date || p.p_to_date || null,
           p_reason: p.p_reason || null,
-          p_employee_id: currentEmployeeId,
+          // Employee identity is resolved from the signed-in account on the server.
           p_document_path: p.p_document_path || null
         };
         return dedupedRpc(originalRpc, name, normalized);
@@ -263,7 +255,6 @@
           p_currency: p.p_currency,
           p_deduction_month: p.p_deduction_month || p.p_payroll_month || p.p_selected_month || null,
           p_reason: p.p_reason || null,
-          p_employee_id: currentEmployeeId
         };
         return dedupedRpc(originalRpc, name, normalized);
       }
