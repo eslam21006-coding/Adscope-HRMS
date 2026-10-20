@@ -102,6 +102,9 @@
     if (/origin not allowed/i.test(raw)) return 'This Employee Portal page is not authorized yet. Contact an Owner.';
     if (/permission denied|not authorized|row-level security/i.test(raw)) return 'You do not have permission to perform this action.';
     if (/jwt.*expired|token.*expired|session.*expired/i.test(raw)) return 'Your session has expired. Sign in again and repeat the action.';
+    if (/The 24-hour appeal period has expired/i.test(raw)) return 'The 24-hour appeal period has expired. Contact an Owner for further review.';
+    if (/This case is not accepting an appeal/i.test(raw)) return 'This case is not currently accepting an appeal.';
+    if (/Appeal reason is required/i.test(raw)) return 'Enter a reason for your appeal.';
     if (/already exists|duplicate/i.test(raw)) return 'This request appears to have already been submitted.';
     if (/overlap/i.test(raw)) return 'This request overlaps an existing request or attendance record.';
     if (/balance|insufficient/i.test(raw)) return 'This request cannot be submitted with the current available balance.';
@@ -417,7 +420,7 @@
 
   async function renderViolations() {
     const violations = await ownRows('violations', 100);
-    const rows = sortRows(violations.data).map(item => `<tr><td>${esc(item.violation_code || item.code || '—')}</td><td>${esc(item.violation_date || item.date || '—')}</td><td>${esc(String(item.violation_type || item.type_name || item.category || 'Violation').replaceAll('_',' '))}</td><td>${badge(item.workflow_status || item.status)}</td><td>${esc(item.description || item.allegation || item.reason || '')}</td><td>${['notified', 'under_review'].includes(String(item.workflow_status || '').toLowerCase()) ? `<button class="secondary" data-respond-violation="${esc(item.id)}" data-appeal-allowed="${item.workflow_status === 'notified' && item.appeal_deadline_at && Date.parse(item.appeal_deadline_at) >= Date.now() ? '1' : '0'}">Respond / Appeal</button>` : '—'}</td></tr>`).join('');
+    const rows = sortRows(violations.data).map(item => `<tr><td>${esc(item.violation_code || item.code || '—')}</td><td>${esc(item.violation_date || item.date || '—')}</td><td>${esc(String(item.violation_type || item.type_name || item.category || 'Violation').replaceAll('_',' '))}</td><td>${badge(item.workflow_status || item.status)}</td><td>${esc(item.description || item.allegation || item.reason || '')}</td><td>${['notified', 'under_review'].includes(String(item.workflow_status || '').toLowerCase()) ? `<button class="secondary" data-respond-violation="${esc(item.id)}" data-appeal-allowed="${item.workflow_status === 'notified' ? '1' : '0'}">Respond / Appeal</button>` : '—'}</td></tr>`).join('');
     return `<section class="panel"><header class="panel-head"><div><h2>Violations & investigations</h2><p>You can view notices here and submit your response. Final sanctions remain subject to Owner review.</p></div></header>${violations.available ? `<div class="table-wrap"><table class="data-table"><thead><tr><th>Code</th><th>Date</th><th>Type</th><th>Status</th><th>Allegation</th><th>Action</th></tr></thead><tbody>${rows}</tbody></table>${rows ? '' : '<div class="empty">No violation notices are assigned to you.</div>'}</div>` : `<div class="panel-body">${sectionUnavailable('Violation records could not be loaded.')}</div>`}</section><div id="violationResponseHost"></div>`;
   }
 
