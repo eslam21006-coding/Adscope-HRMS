@@ -330,12 +330,12 @@
 
   async function renderHome() {
     const [leaves, permissions, advances, violations, notifications] = await Promise.all([
-      ownRows('leave_requests', 50), ownRows('permission_requests', 50), ownRows('advance_requests', 50), ownRows('violations', 50), loadNotifications(50)
+      ownRows('leave_requests', 50), ownRows('permission_requests', 50), ownRows('advance_requests', 50), ownRows('violations', 50), countUnreadNotifications()
     ]);
     const pendingKnown = leaves.available && permissions.available && advances.available;
     const pending = pendingKnown ? [...leaves.data, ...permissions.data, ...advances.data].filter(row => /pending|submitted|review/i.test(String(row.status || row.workflow_status || ''))).length : null;
     const openViolations = violations.available ? violations.data.filter(row => !/final|rejected|closed/i.test(String(row.workflow_status || row.status || ''))).length : null;
-    const unread = notifications.available ? notifications.data.filter(row => !(row.is_read ?? row.read ?? row.read_at)).length : null;
+    const unread = notifications.available ? notifications.count : null;
     const state = currentState();
     const shift = attendance?.shift || profile?.shift || {};
     return `<div class="grid three">
@@ -427,14 +427,29 @@
     const uid = session?.user?.id;
     if (!uid) return { data: [], available: false };
     // Production notifications are recipient-scoped and RLS protects the signed-in user.
-    return optionalQuery(() => client.from('notifications').select('*').eq('recipient_user_id', uid).limit(limit));
+    return optionalQuery(() => client.from('notifications').select('*').eq('recipient_user_id', uid).order('created_at', { ascending: false }).limit(limit));
+  }
+
+  async function countUnreadNotifications() {
+    const uid = session?.user?.id;
+    if (!uid) return { count: null, available: false };
+    try {
+      const result = await withTimeout(client.from('notifications')
+        .select('*', { count: 'exact', head: true })
+        .eq('recipient_user_id', uid)
+        .eq('is_read', false));
+      if (result.error || !Number.isInteger(result.count)) return { count: null, available: false };
+      return { count: result.count, available: true };
+    } catch {
+      return { count: null, available: false };
+    }
   }
 
   async function renderNotifications() {
-    const notifications = await loadNotifications(100);
+    const [notifications, unreadSummary] = await Promise.all([loadNotifications(100), countUnreadNotifications()]);
     const rows = sortRows(notifications.data);
     if (!notifications.available) return `<section class="panel"><header class="panel-head"><div><h2>Notifications</h2><p>HRMS updates and Owner decisions.</p></div></header><div class="panel-body">${sectionUnavailable('Notifications could not be loaded. This does not affect attendance or your other portal sections.')}</div></section>`;
-    return `<section class="panel"><header class="panel-head"><div><h2>Notifications</h2><p>${rows.filter(row => !(row.is_read ?? row.read ?? row.read_at)).length} unread</p></div></header><div class="panel-body"><div class="stack">${rows.map(row => `<div class="detail"><span>${esc(dateTime(row.created_at || row.sent_at || row.updated_at))}</span><strong>${esc(row.title || row.subject || String(row.type || 'HRMS notification').replaceAll('_',' '))}</strong><p class="sub" style="margin:5px 0 0">${esc(row.message || row.body || row.text || '')}</p>${row.is_read ? '' : `<button class="secondary" type="button" data-mark-notification-read="${esc(row.id)}">Mark as read</button>`}</div>`).join('') || '<div class="empty">No notifications yet.</div>'}</div></div></section>`;
+    return `<section class="panel"><header class="panel-head"><div><h2>Notifications</h2><p>${unreadSummary.available ? `${unreadSummary.count} unread` : 'Unread count unavailable'}</p></div></header><div class="panel-body"><div class="stack">${rows.map(row => `<div class="detail"><span>${esc(dateTime(row.created_at || row.sent_at || row.updated_at))}</span><strong>${esc(row.title || row.subject || String(row.type || 'HRMS notification').replaceAll('_',' '))}</strong><p class="sub" style="margin:5px 0 0">${esc(row.message || row.body || row.text || '')}</p>${row.is_read ? '' : `<button class="secondary" type="button" data-mark-notification-read="${esc(row.id)}">Mark as read</button>`}</div>`).join('') || '<div class="empty">No notifications yet.</div>'}</div></div></section>`;
   }
 
   async function renderProfile() {
