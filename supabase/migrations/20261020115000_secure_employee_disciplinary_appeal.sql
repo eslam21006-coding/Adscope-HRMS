@@ -16,6 +16,7 @@ ALTER FUNCTION public.submit_disciplinary_appeal(uuid, text, jsonb)
   SET search_path = pg_catalog, public, app_private;
 
 REVOKE ALL ON FUNCTION public.submit_disciplinary_appeal(uuid, text, jsonb) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.submit_disciplinary_appeal(uuid, text, jsonb) FROM anon;
 GRANT EXECUTE ON FUNCTION public.submit_disciplinary_appeal(uuid, text, jsonb) TO authenticated;
 
 -- Apply this migration only after review and staging verification.
