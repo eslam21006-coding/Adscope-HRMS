@@ -4,7 +4,6 @@
   if (!window.supabase?.createClient) return;
 
   const originalCreateClient = window.supabase.createClient.bind(window.supabase);
-  const requestCache = new Map();
   const violationIntent = new Map();
   const REQUEST_DEDUPE_MS = 120000;
   const orderColumns = {
@@ -21,7 +20,7 @@
     return JSON.stringify([name, entries]);
   }
 
-  function dedupedRpc(originalRpc, name, payload) {
+  function dedupedRpc(originalRpc, name, payload, requestCache) {
     const key = stableRequestKey(name, payload);
     const cached = requestCache.get(key);
     if (cached && Date.now() - cached.createdAt < REQUEST_DEDUPE_MS) return cached.promise;
@@ -181,13 +180,28 @@
     const originalRpc = client.rpc.bind(client);
     const originalFrom = client.from.bind(client);
     const originalGetSession = client.auth.getSession.bind(client.auth);
+    const requestCache = new Map(); // No cached submission can cross clients or accounts.
     let currentUserId = null;
 
     client.auth.getSession = async (...sessionArgs) => {
       const result = await originalGetSession(...sessionArgs);
-      currentUserId = result?.data?.session?.user?.id || currentUserId;
+      const nextUserId = result?.data?.session?.user?.id || null;
+      if (nextUserId !== currentUserId) requestCache.clear();
+      currentUserId = nextUserId;
       return result;
     };
+
+    if (typeof client.auth.signOut === 'function') {
+      const originalSignOut = client.auth.signOut.bind(client.auth);
+      client.auth.signOut = async (...signOutArgs) => {
+        try {
+          return await originalSignOut(...signOutArgs);
+        } finally {
+          requestCache.clear();
+          currentUserId = null;
+        }
+      };
+    }
 
     client.from = function from(table) {
       const mapped = table === 'advance_requests' ? 'advances' : table;
@@ -232,7 +246,7 @@
             window.ADSCOPE_CONFIG?.timezone || 'Africa/Cairo'
           )
         };
-        return dedupedRpc(originalRpc, name, normalized);
+        return dedupedRpc(originalRpc, name, normalized, requestCache);
       }
 
       if (name === 'submit_leave_request') {
@@ -245,7 +259,7 @@
           // Employee identity is resolved from the signed-in account on the server.
           p_document_path: p.p_document_path || null
         };
-        return dedupedRpc(originalRpc, name, normalized);
+        return dedupedRpc(originalRpc, name, normalized, requestCache);
       }
 
       if (name === 'submit_advance_request') {
@@ -256,7 +270,7 @@
           p_deduction_month: p.p_deduction_month || p.p_payroll_month || p.p_selected_month || null,
           p_reason: p.p_reason || null
         };
-        return dedupedRpc(originalRpc, name, normalized);
+        return dedupedRpc(originalRpc, name, normalized, requestCache);
       }
 
       if (name === 'submit_violation_response') {
@@ -265,7 +279,7 @@
         return dedupedRpc(originalRpc, name, {
           p_violation_id: p.p_violation_id,
           p_response: p.p_response
-        });
+        }, requestCache);
       }
 
       if (name === 'submit_violation_appeal') {
