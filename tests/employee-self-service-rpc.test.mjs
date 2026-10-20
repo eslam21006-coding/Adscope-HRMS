@@ -8,12 +8,14 @@ const compat = readFileSync(new URL('../attendance/portal-compat.js', import.met
 function createHarness() {
   const calls = [];
   let userId = 'test-user';
+  let authListener = null;
   const client = {
     auth: {
       async getSession() {
         return { data: { session: userId ? { user: { id: userId } } : null }, error: null };
       },
-      async signOut() { userId = null; return { error: null }; }
+      async signOut() { userId = null; return { error: null }; },
+      onAuthStateChange(callback) { authListener = callback; return { data: { subscription: { unsubscribe() {} } } }; }
     },
     from() { return {}; },
     async rpc(name, args = {}) {
@@ -36,7 +38,7 @@ function createHarness() {
   class MutationObserver { observe() {} }
 
   vm.runInNewContext(compat, { window, document, MutationObserver, Intl, Date, Map, Promise });
-  return { client: window.supabase.createClient('test-url', 'test-publishable'), calls, setUserId(id) { userId = id; } };
+  return { client: window.supabase.createClient('test-url', 'test-publishable'), calls, setUserId(id) { userId = id; }, fireAuthChange(id) { userId = id; if (authListener) authListener('SIGNED_IN', id ? { user: { id } } : null); } };
 }
 
 async function signedInClient() {
@@ -126,6 +128,21 @@ test('sign-out clears the cached request response before the next sign-in', asyn
   await h.client.auth.signOut();
   h.setUserId('another-user');
   await h.client.auth.getSession();
+  await h.client.rpc('submit_permission_request', payload);
+  assert.equal(h.calls.filter(call => call.name === 'submit_permission_request').length, 2);
+});
+
+test('authentication event switches employee without requiring explicit getSession', async () => {
+  const h = createHarness();
+  const payload = {
+    p_request_type: 'late_start',
+    p_request_date: '2026-10-27',
+    p_late_start_time: '11:30',
+    p_reason: 'identical input across employees'
+  };
+  await h.client.auth.getSession();
+  await h.client.rpc('submit_permission_request', payload);
+  h.fireAuthChange('different-employee');
   await h.client.rpc('submit_permission_request', payload);
   assert.equal(h.calls.filter(call => call.name === 'submit_permission_request').length, 2);
 });
