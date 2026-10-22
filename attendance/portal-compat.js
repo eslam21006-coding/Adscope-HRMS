@@ -4,7 +4,6 @@
   if (!window.supabase?.createClient) return;
 
   const originalCreateClient = window.supabase.createClient.bind(window.supabase);
-  const requestCache = new Map();
   const violationIntent = new Map();
   const REQUEST_DEDUPE_MS = 120000;
   const orderColumns = {
@@ -21,7 +20,7 @@
     return JSON.stringify([name, entries]);
   }
 
-  function dedupedRpc(originalRpc, name, payload) {
+  function dedupedRpc(originalRpc, name, payload, requestCache) {
     const key = stableRequestKey(name, payload);
     const cached = requestCache.get(key);
     if (cached && Date.now() - cached.createdAt < REQUEST_DEDUPE_MS) return cached.promise;
@@ -181,20 +180,38 @@
     const originalRpc = client.rpc.bind(client);
     const originalFrom = client.from.bind(client);
     const originalGetSession = client.auth.getSession.bind(client.auth);
-    let currentEmployeeId = null;
+    const requestCache = new Map(); // No cached submission can cross clients or accounts.
     let currentUserId = null;
+
+    // Auth can change via sign-in/token events without an explicit getSession call.
+    // Never reuse a previous employee's request cache after an account transition.
+    if (typeof client.auth.onAuthStateChange === 'function') {
+      client.auth.onAuthStateChange((_event, nextSession) => {
+        const nextUserId = nextSession?.user?.id || null;
+        if (nextUserId !== currentUserId) requestCache.clear();
+        currentUserId = nextUserId;
+      });
+    }
 
     client.auth.getSession = async (...sessionArgs) => {
       const result = await originalGetSession(...sessionArgs);
-      currentUserId = result?.data?.session?.user?.id || currentUserId;
+      const nextUserId = result?.data?.session?.user?.id || null;
+      if (nextUserId !== currentUserId) requestCache.clear();
+      currentUserId = nextUserId;
       return result;
     };
 
-    const rememberEmployee = data => {
-      const id = data?.employee_id || data?.id || data?.employee?.id || null;
-      if (id) currentEmployeeId = id;
-      return data;
-    };
+    if (typeof client.auth.signOut === 'function') {
+      const originalSignOut = client.auth.signOut.bind(client.auth);
+      client.auth.signOut = async (...signOutArgs) => {
+        try {
+          return await originalSignOut(...signOutArgs);
+        } finally {
+          requestCache.clear();
+          currentUserId = null;
+        }
+      };
+    }
 
     client.from = function from(table) {
       const mapped = table === 'advance_requests' ? 'advances' : table;
@@ -207,13 +224,12 @@
       if (name === 'get_my_attendance_profile') {
         const attendanceProfile = await originalRpc(name, payload);
         if (attendanceProfile.error) return attendanceProfile;
-        let merged = rememberEmployee(attendanceProfile.data) || {};
+        let merged = attendanceProfile.data || {};
 
         try {
           const portalProfile = await originalRpc('get_my_employee_portal_profile', {});
           if (!portalProfile.error && portalProfile.data) {
             merged = { ...portalProfile.data, ...merged };
-            rememberEmployee(merged);
           }
         } catch {
           // Attendance profile remains sufficient for core portal boot.
@@ -224,6 +240,7 @@
 
       if (name === 'submit_permission_request') {
         const p = payload || {};
+        // The server resolves the employee from auth; a supplied employee ID is Owner-only.
         const normalized = {
           p_request_type: p.p_request_type || p.p_type || p.p_permission_type || null,
           p_request_date: p.p_request_date || p.p_date || null,
@@ -237,10 +254,9 @@
           p_corrected_check_out: normalizeCorrectionTimestamp(
             p.p_corrected_check_out || p.p_corrected_check_out_at || p.p_check_out_at || null,
             window.ADSCOPE_CONFIG?.timezone || 'Africa/Cairo'
-          ),
-          p_employee_id: currentEmployeeId
+          )
         };
-        return dedupedRpc(originalRpc, name, normalized);
+        return dedupedRpc(originalRpc, name, normalized, requestCache);
       }
 
       if (name === 'submit_leave_request') {
@@ -250,10 +266,10 @@
           p_start_date: p.p_start_date || p.p_from_date || null,
           p_end_date: p.p_end_date || p.p_to_date || null,
           p_reason: p.p_reason || null,
-          p_employee_id: currentEmployeeId,
+          // Employee identity is resolved from the signed-in account on the server.
           p_document_path: p.p_document_path || null
         };
-        return dedupedRpc(originalRpc, name, normalized);
+        return dedupedRpc(originalRpc, name, normalized, requestCache);
       }
 
       if (name === 'submit_advance_request') {
@@ -262,10 +278,9 @@
           p_amount: p.p_amount,
           p_currency: p.p_currency,
           p_deduction_month: p.p_deduction_month || p.p_payroll_month || p.p_selected_month || null,
-          p_reason: p.p_reason || null,
-          p_employee_id: currentEmployeeId
+          p_reason: p.p_reason || null
         };
-        return dedupedRpc(originalRpc, name, normalized);
+        return dedupedRpc(originalRpc, name, normalized, requestCache);
       }
 
       if (name === 'submit_violation_response') {
@@ -274,7 +289,7 @@
         return dedupedRpc(originalRpc, name, {
           p_violation_id: p.p_violation_id,
           p_response: p.p_response
-        });
+        }, requestCache);
       }
 
       if (name === 'submit_violation_appeal') {

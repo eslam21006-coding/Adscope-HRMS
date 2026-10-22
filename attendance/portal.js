@@ -100,8 +100,30 @@
     if (/invalid login credentials/i.test(raw)) return 'The email or password is incorrect.';
     if (/email not confirmed/i.test(raw)) return 'Please confirm your email address before signing in.';
     if (/origin not allowed/i.test(raw)) return 'This Employee Portal page is not authorized yet. Contact an Owner.';
+    // Only render fixed, reviewed messages. Never show arbitrary provider/database text.
+    if (/Only an Owner can (?:submit a request for another employee|submit an advance for another employee|create leave for another employee)/i.test(raw)) return 'Your account cannot submit this request. Contact an Owner if the issue continues.';
+    if (/Active employee not found/i.test(raw)) return 'Your employee record is not active or linked correctly. Contact an Owner.';
+    if (/Requested start time is required/i.test(raw)) return 'Select the requested start time.';
+    if (/Requested leave time is required/i.test(raw)) return 'Select the requested end time.';
+    if (/Appeal reason is required/i.test(raw)) return 'Enter a reason for your appeal.';
+    if (/Date and reason are required|Reason is required/i.test(raw)) return 'Select a date and enter a reason.';
+    if (/Enter a corrected check-in or check-out time/i.test(raw)) return 'Enter at least one corrected attendance time.';
+    if (/Enter a valid leave date range/i.test(raw)) return 'Select valid leave dates, with the end date on or after the start date.';
+    if (/The selected period contains no scheduled workdays/i.test(raw)) return 'The chosen dates do not include a scheduled working day.';
+    if (/Paid vacation becomes available after/i.test(raw)) return 'Paid vacation is not yet available under the employment eligibility policy.';
+    if (/Emergency leave is limited to/i.test(raw)) return 'This emergency leave request exceeds the company limit.';
+    if (/Another pending or approved leave overlaps these dates/i.test(raw)) return 'A pending or approved leave request already covers these dates.';
+    if (/Leave type is not available/i.test(raw)) return 'The selected leave type is not available.';
+    if (/Advance amount must be greater than zero/i.test(raw)) return 'Enter an advance amount greater than zero.';
+    if (/Deduction month must be the first day of a month/i.test(raw)) return 'Select a valid payroll deduction month.';
+    if (/Unsupported currency/i.test(raw)) return 'The selected currency is not supported.';
+    if (/PGRST202|could not find the function|schema cache/i.test(raw) || error?.code === 'PGRST202') return 'The request service is temporarily unavailable. Contact an Owner if it persists.';
     if (/permission denied|not authorized|row-level security/i.test(raw)) return 'You do not have permission to perform this action.';
     if (/jwt.*expired|token.*expired|session.*expired/i.test(raw)) return 'Your session has expired. Sign in again and repeat the action.';
+    if (/An active employee account is required/i.test(raw)) return 'Your employee account is not active for Employee Portal access. Contact an Owner.';
+    if (/Case not found|Incident not found/i.test(raw)) return 'This case could not be found. Refresh the page and try again.';
+    if (/The 24-hour appeal period has expired/i.test(raw)) return 'The 24-hour appeal period has expired. Contact an Owner for further review.';
+    if (/This case is not accepting an appeal/i.test(raw)) return 'This case is not currently accepting an appeal.';
     if (/already exists|duplicate/i.test(raw)) return 'This request appears to have already been submitted.';
     if (/overlap/i.test(raw)) return 'This request overlaps an existing request or attendance record.';
     if (/balance|insufficient/i.test(raw)) return 'This request cannot be submitted with the current available balance.';
@@ -281,6 +303,10 @@
     element.textContent = new Intl.DateTimeFormat('en-GB', {
       timeZone: cfg.timezone, weekday:'short', day:'2-digit', month:'short', hour:'2-digit', minute:'2-digit', hour12: portalTimeFormat() === '12'
     }).format(new Date());
+    const attendanceClock = document.getElementById('attendanceClock');
+    if (attendanceClock) attendanceClock.textContent = new Intl.DateTimeFormat('en-GB', {
+      timeZone: cfg.timezone, dateStyle: 'full', timeStyle: 'medium', hour12: portalTimeFormat() === '12'
+    }).format(new Date());
   }
 
   function updateShellState(page) {
@@ -330,17 +356,18 @@
 
   async function renderHome() {
     const [leaves, permissions, advances, violations, notifications] = await Promise.all([
-      ownRows('leave_requests', 50), ownRows('permission_requests', 50), ownRows('advance_requests', 50), ownRows('violations', 50), loadNotifications(50)
+      ownRows('leave_requests', 50), ownRows('permission_requests', 50), ownRows('advance_requests', 50), ownRows('violations', 50), countUnreadNotifications()
     ]);
-    const pending = [...leaves.data, ...permissions.data, ...advances.data].filter(row => /pending|submitted|review/i.test(String(row.status || row.workflow_status || ''))).length;
-    const openViolations = violations.data.filter(row => !/final|rejected|closed/i.test(String(row.workflow_status || row.status || ''))).length;
-    const unread = notifications.data.filter(row => !(row.is_read ?? row.read ?? row.read_at)).length;
+    const pendingKnown = leaves.available && permissions.available && advances.available;
+    const pending = pendingKnown ? [...leaves.data, ...permissions.data, ...advances.data].filter(row => /pending|submitted|review/i.test(String(row.status || row.workflow_status || ''))).length : null;
+    const openViolations = violations.available ? violations.data.filter(row => !/final|rejected|closed/i.test(String(row.workflow_status || row.status || ''))).length : null;
+    const unread = notifications.available ? notifications.count : null;
     const state = currentState();
     const shift = attendance?.shift || profile?.shift || {};
     return `<div class="grid three">
       <div class="metric"><span>Attendance</span><strong>${esc(state.replaceAll('-', ' '))}</strong></div>
-      <div class="metric"><span>Pending requests</span><strong>${pending}</strong></div>
-      <div class="metric"><span>Unread notifications</span><strong>${unread}</strong></div>
+      <div class="metric"><span>Pending requests</span><strong>${pending === null ? '—' : pending}</strong></div>
+      <div class="metric"><span>Unread notifications</span><strong>${unread === null ? '—' : unread}</strong></div>
     </div>
     <div class="grid two" style="margin-top:16px">
       <section class="panel"><header class="panel-head"><div><h2>Today</h2><p>${esc(attendance?.shift_date || localDate())}</p></div>${badge(state)}</header><div class="panel-body">
@@ -350,7 +377,8 @@
       <section class="panel"><header class="panel-head"><div><h2>Needs attention</h2><p>Your current HRMS items</p></div></header><div class="panel-body">
         ${attendance?.previous_review ? `<div class="notice"><strong>Attendance correction needed</strong><p>${esc(attendance.previous_review.attendance_date)} — ${esc(attendance.previous_review.reason || 'A previous record needs review.')}</p></div>` : ''}
         ${openViolations ? `<div class="notice"><strong>${openViolations} open violation ${openViolations === 1 ? 'case' : 'cases'}</strong><p>Open Violations to view the notice and response status.</p></div>` : ''}
-        ${!attendance?.previous_review && !openViolations ? '<div class="notice success"><strong>No urgent items</strong><p>No attendance correction or open violation is currently flagged here.</p></div>' : ''}
+        ${!violations.available ? '<div class="notice"><strong>Some alerts could not be checked</strong><p>Open Violations or refresh this page to try again.</p></div>' : ''}
+        ${!attendance?.previous_review && violations.available && openViolations === 0 ? '<div class="notice success"><strong>No urgent items</strong><p>No attendance correction or open violation is currently flagged here.</p></div>' : ''}
       </div></section>
     </div>`;
   }
@@ -417,29 +445,37 @@
 
   async function renderViolations() {
     const violations = await ownRows('violations', 100);
-    const rows = sortRows(violations.data).map(item => `<tr><td>${esc(item.violation_code || item.code || '—')}</td><td>${esc(item.violation_date || item.date || '—')}</td><td>${esc(String(item.violation_type || item.type_name || item.category || 'Violation').replaceAll('_',' '))}</td><td>${badge(item.workflow_status || item.status)}</td><td>${esc(item.description || item.allegation || item.reason || '')}</td><td>${item.workflow_status && !/final|rejected|closed/i.test(item.workflow_status) ? `<button class="secondary" data-respond-violation="${esc(item.id)}">Respond</button>` : '—'}</td></tr>`).join('');
+    const rows = sortRows(violations.data).map(item => `<tr><td>${esc(item.violation_code || item.code || '—')}</td><td>${esc(item.violation_date || item.date || '—')}</td><td>${esc(String(item.violation_type || item.type_name || item.category || 'Violation').replaceAll('_',' '))}</td><td>${badge(item.workflow_status || item.status)}</td><td>${esc(item.description || item.allegation || item.reason || '')}</td><td>${['notified', 'under_review'].includes(String(item.workflow_status || '').toLowerCase()) ? `<button class="secondary" data-respond-violation="${esc(item.id)}" data-appeal-allowed="${String(item.workflow_status || '').toLowerCase() === 'notified' ? '1' : '0'}">${String(item.workflow_status || '').toLowerCase() === 'notified' ? 'Respond / Appeal' : 'Respond'}</button>` : '—'}</td></tr>`).join('');
     return `<section class="panel"><header class="panel-head"><div><h2>Violations & investigations</h2><p>You can view notices here and submit your response. Final sanctions remain subject to Owner review.</p></div></header>${violations.available ? `<div class="table-wrap"><table class="data-table"><thead><tr><th>Code</th><th>Date</th><th>Type</th><th>Status</th><th>Allegation</th><th>Action</th></tr></thead><tbody>${rows}</tbody></table>${rows ? '' : '<div class="empty">No violation notices are assigned to you.</div>'}</div>` : `<div class="panel-body">${sectionUnavailable('Violation records could not be loaded.')}</div>`}</section><div id="violationResponseHost"></div>`;
   }
 
   async function loadNotifications(limit = 100) {
-    const id = employeeId();
     const uid = session?.user?.id;
-    if (!id && !uid) return { data: [], available: false };
-    const attempts = [];
-    if (id) attempts.push(() => client.from('notifications').select('*').eq('employee_id', id).limit(limit));
-    if (uid) attempts.push(() => client.from('notifications').select('*').eq('user_id', uid).limit(limit));
-    for (const attempt of attempts) {
-      const result = await optionalQuery(attempt);
-      if (result.available) return result;
+    if (!uid) return { data: [], available: false };
+    // Production notifications are recipient-scoped and RLS protects the signed-in user.
+    return optionalQuery(() => client.from('notifications').select('*').eq('recipient_user_id', uid).order('created_at', { ascending: false }).limit(limit));
+  }
+
+  async function countUnreadNotifications() {
+    const uid = session?.user?.id;
+    if (!uid) return { count: null, available: false };
+    try {
+      const result = await withTimeout(client.from('notifications')
+        .select('*', { count: 'exact', head: true })
+        .eq('recipient_user_id', uid)
+        .eq('is_read', false));
+      if (result.error || !Number.isInteger(result.count)) return { count: null, available: false };
+      return { count: result.count, available: true };
+    } catch {
+      return { count: null, available: false };
     }
-    return { data: [], available: false };
   }
 
   async function renderNotifications() {
-    const notifications = await loadNotifications(100);
+    const [notifications, unreadSummary] = await Promise.all([loadNotifications(100), countUnreadNotifications()]);
     const rows = sortRows(notifications.data);
     if (!notifications.available) return `<section class="panel"><header class="panel-head"><div><h2>Notifications</h2><p>HRMS updates and Owner decisions.</p></div></header><div class="panel-body">${sectionUnavailable('Notifications could not be loaded. This does not affect attendance or your other portal sections.')}</div></section>`;
-    return `<section class="panel"><header class="panel-head"><div><h2>Notifications</h2><p>${rows.filter(row => !(row.is_read ?? row.read ?? row.read_at)).length} unread</p></div></header><div class="panel-body"><div class="stack">${rows.map(row => `<div class="detail"><span>${esc(dateTime(row.created_at || row.sent_at || row.updated_at))}</span><strong>${esc(row.title || row.subject || String(row.type || 'HRMS notification').replaceAll('_',' '))}</strong><p class="sub" style="margin:5px 0 0">${esc(row.message || row.body || row.text || '')}</p></div>`).join('') || '<div class="empty">No notifications yet.</div>'}</div></div></section>`;
+    return `<section class="panel"><header class="panel-head"><div><h2>Notifications</h2><p>${unreadSummary.available ? `${unreadSummary.count} unread` : 'Unread count unavailable'}</p></div></header><div class="panel-body"><div class="stack">${rows.map(row => `<div class="detail"><span>${esc(dateTime(row.created_at || row.sent_at || row.updated_at))}</span><strong>${esc(row.title || row.subject || String(row.type || 'HRMS notification').replaceAll('_',' '))}</strong><p class="sub" style="margin:5px 0 0">${esc(row.message || row.body || row.text || '')}</p>${row.is_read ? '' : `<button class="secondary" type="button" data-mark-notification-read="${esc(row.id)}">Mark as read</button>`}</div>`).join('') || '<div class="empty">No notifications yet.</div>'}</div></div></section>`;
   }
 
   async function renderProfile() {
@@ -465,6 +501,27 @@
     if (page === 'leave') bindLeave(content);
     if (page === 'advances') bindAdvances(content);
     if (page === 'violations') bindViolations(content);
+    if (page === 'notifications') bindNotifications(content);
+  }
+
+  function bindNotifications(content) {
+    content.querySelectorAll('[data-mark-notification-read]').forEach(button => {
+      button.onclick = async () => {
+        const id = button.dataset.markNotificationRead;
+        button.disabled = true;
+        button.textContent = 'Saving…';
+        try {
+          const result = await withTimeout(client.rpc('mark_notification_read', { p_notification_id: id }));
+          if (result.error) throw result.error;
+          toast('Notification marked as read.', 'success');
+          loadPage('notifications');
+        } catch (error) {
+          button.disabled = false;
+          button.textContent = 'Mark as read';
+          toast(friendlyError(error), 'error');
+        }
+      };
+    });
   }
 
   function bindAttendance(content) {
@@ -613,7 +670,7 @@
   function bindViolations(content) {
     const host = content.querySelector('#violationResponseHost');
     content.querySelectorAll('[data-respond-violation]').forEach(button => button.onclick = () => {
-      host.innerHTML = `<section class="panel" style="margin-top:16px"><header class="panel-head"><div><h2>Respond to violation</h2><p>Your response is recorded for Owner review.</p></div></header><div class="panel-body"><form id="violationResponseForm" data-violation-id="${esc(button.dataset.respondViolation)}"><label class="field"><span>Your response / appeal</span><textarea name="response" required></textarea></label><label class="field"><span>Response type</span><select name="response_type"><option value="response">Response</option><option value="appeal">Appeal</option></select></label><button class="primary" type="submit">Submit response</button></form></div></section>`;
+      host.innerHTML = `<section class="panel" style="margin-top:16px"><header class="panel-head"><div><h2>Respond to violation</h2><p>Your response is recorded for Owner review.</p></div></header><div class="panel-body"><form id="violationResponseForm" data-violation-id="${esc(button.dataset.respondViolation)}"><label class="field"><span>Your response / appeal</span><textarea name="response" required></textarea></label><label class="field"><span>Response type</span><select name="response_type"><option value="response">Response</option><option value="appeal"${button.dataset.appealAllowed === '1' ? '' : ' disabled'}>Appeal</option></select></label><button class="primary" type="submit">Submit response</button></form></div></section>`;
       bindViolationResponse(host.querySelector('#violationResponseForm'));
       host.scrollIntoView({ behavior:'smooth', block:'nearest' });
     });
@@ -632,26 +689,19 @@
       const violationId = form.dataset.violationId;
       const responseText = fd.get('response');
       const responseType = fd.get('response_type');
-      const attempts = [
-        ['submit_violation_response', { p_violation_id:violationId,p_response:responseText,p_response_type:responseType }],
-        ['respond_to_violation', { p_violation_id:violationId,p_response:responseText,p_is_appeal:responseType === 'appeal' }],
-        ['submit_violation_appeal', { p_violation_id:violationId,p_reason:responseText }]
-      ];
+      // A disciplinary appeal has its own server workflow. Never record it as an ordinary response.
+      const isAppeal = responseType === 'appeal';
+      const name = isAppeal ? 'submit_disciplinary_appeal' : 'submit_violation_response';
+      const args = isAppeal
+        ? { p_violation_id: violationId, p_appeal_reason: responseText, p_evidence: [] }
+        : { p_violation_id: violationId, p_response: responseText };
       button.disabled = true;
       button.textContent = 'Submitting…';
-      let lastError = null;
       try {
-        for (const [name,args] of attempts) {
-          const result = await withTimeout(client.rpc(name,args));
-          if (!result.error) {
-            toast('Your response was submitted for Owner review.', 'success');
-            loadPage('violations');
-            return;
-          }
-          if (!isRpcMismatch(result.error)) throw result.error;
-          lastError = result.error;
-        }
-        throw lastError || new Error('Response service unavailable');
+        const result = await withTimeout(client.rpc(name, args));
+        if (result.error) throw result.error;
+        toast(isAppeal ? 'Appeal submitted for Owner review.' : 'Response submitted for Owner review.', 'success');
+        loadPage('violations');
       } catch (error) {
         button.disabled = false;
         button.textContent = 'Submit response';

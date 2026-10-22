@@ -30,8 +30,8 @@ test('full portal keeps the server-authoritative attendance lifecycle', () => {
 
 test('employee records are explicitly scoped to the signed-in employee', () => {
   assert.match(portal, /from\(table\)\.select\('\*'\)\.eq\('employee_id', id\)/);
-  assert.match(portal, /from\('notifications'\)\.select\('\*'\)\.eq\('employee_id', id\)/);
-  assert.match(portal, /from\('notifications'\)\.select\('\*'\)\.eq\('user_id', uid\)/);
+  assert.match(portal, /from\('notifications'\)\.select\('\*'\)\.eq\('recipient_user_id', uid\)/);
+  assert.doesNotMatch(portal, /from\('notifications'\)\.select\('\*'\)\.eq\('employee_id', id\)/);
 });
 
 test('employee request workflows call the existing server functions', () => {
