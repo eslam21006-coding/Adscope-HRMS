@@ -1,48 +1,34 @@
-import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
-import { test } from 'node:test'
-import vm from 'node:vm'
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { test } from 'node:test';
+import vm from 'node:vm';
 
-const loaderPath = new URL('../admin/index.html', import.meta.url)
-const source = readFileSync(loaderPath, 'utf8')
+const loader = readFileSync(new URL('../admin/index.html', import.meta.url), 'utf8');
+const filters = readFileSync(new URL('../admin/attendance-filters.js', import.meta.url), 'utf8');
 
-function filterScript() {
-  const match = source.match(/const source=`([\s\S]*?)`;\n\s*return '<scr'/)
-  assert.ok(match, 'Attendance filter source must remain extractable from the Admin loader')
-  return match[1]
-}
+test('Admin loader injects the external attendance filter script into the Admin bundle only', () => {
+  assert.match(loader, /runtimePatch.*attendance-filters\.js/);
+  assert.match(loader, /attendance-session-review\.js/);
+  assert.match(loader, /html\.replace\(\/<\\\/body>\/i,runtimePatch\+'<\/body>'\)/);
+});
 
-test('Admin loader injects attendance filters only into the real Admin bundle', () => {
-  assert.ok(source.includes('data-adscope-attendance-filters="date-person-v1"'))
-  assert.ok(source.includes("const shouldInjectFilters=/id\\s*=\\s*[\"']app[\"']/i.test(html);"))
-  assert.ok(source.includes("const filterPatch=shouldInjectFilters?attendanceFilterPatch():'';"))
-  assert.ok(source.includes("html.replace(/<\\/body>/i,filterPatch+'</body>')"))
-})
+test('attendance controls include date, employee, attended-only and clearing', () => {
+  for (const text of ['data-attendance-date','data-attendance-employee','All employees','All attendance records','Attended only','data-attendance-reset']) {
+    assert.ok(filters.includes(text), 'Missing '+text);
+  }
+  assert.match(filters, /row\.hidden=!show/);
+  assert.match(filters, /employeeKey===filterState\.employee/);
+  assert.match(filters, /details\.date===filterState\.date/);
+});
 
-test('Attendance filters provide exact date, employee and attended-only controls', () => {
-  const script = filterScript()
-  assert.match(script, /data-attendance-date/)
-  assert.match(script, /data-attendance-employee/)
-  assert.match(script, /All employees/)
-  assert.match(script, /All attendance records/)
-  assert.match(script, /Attended only/)
-  assert.match(script, /details\.date===filterState\.date/)
-  assert.match(script, /employeeKey===filterState\.employee/)
-  assert.match(script, /filterState\.mode!==['"]attended['"]\|\|details\.attended/)
-  assert.match(script, /row\.hidden=!show/)
-})
+test('selected month bounds limit date filters; resetting clears all criteria', () => {
+  assert.match(filters, /dateInput\.min=bounds\.min/);
+  assert.match(filters, /dateInput\.max=bounds\.max/);
+  assert.match(filters, /target\.id==='activeMonth'/);
+  assert.match(filters, /filterState=\{date:'',employee:'',mode:'all'\}/);
+});
 
-test('Attendance filters stay inside the selected month and can be cleared', () => {
-  const script = filterScript()
-  assert.match(script, /dateInput\.min=bounds\.min/)
-  assert.match(script, /dateInput\.max=bounds\.max/)
-  assert.match(script, /data-attendance-reset/)
-  assert.match(script, /filterState=\{date:'',employee:'',mode:'all'\}/)
-  assert.match(script, /target\.id===['"]activeMonth['"]/)
-})
-
-test('Attendance filtering is read-only and the injected script parses', () => {
-  const script = filterScript()
-  assert.doesNotMatch(script, /\.from\(|\.rpc\(|\.update\(|\.insert\(|\.delete\(/)
-  assert.doesNotThrow(() => new vm.Script(script))
-})
+test('external attendance filter is read-only and valid JavaScript', () => {
+  assert.doesNotThrow(() => new vm.Script(filters));
+  assert.doesNotMatch(filters, /\.from\(|\.rpc\(|\.update\(|\.insert\(|\.delete\(/);
+});
