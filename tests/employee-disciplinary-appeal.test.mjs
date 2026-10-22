@@ -77,7 +77,7 @@ test('migration scopes appeal privilege to the existing server-checked function'
 });
 
 test('device clock cannot block a timely appeal; server checks the deadline', () => {
-  assert.match(portal, /item\.workflow_status === 'notified' \? '1' : '0'/);
+  assert.match(portal, /String\(item\.workflow_status \|\| ''\)\.toLowerCase\(\) === 'notified' \? '1' : '0'/);
   assert.doesNotMatch(portal, /Date\.parse\(item\.appeal_deadline_at\)/);
   assert.match(portal, /The 24-hour appeal period has expired/);
 });
