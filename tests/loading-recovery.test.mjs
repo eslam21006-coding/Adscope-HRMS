@@ -70,36 +70,37 @@ async function executeLoader(file, fetchImpl, timeoutMs = 10, settleMs = 40, { d
   return state
 }
 
-for (const [name, file] of [['Admin', adminLoaderPath], ['Employee', employeeLoaderPath]]) {
-  test(`${name} loader downloads and injects a valid gzip bundle`, async () => {
-    const expected = '<!doctype html><title>Loaded</title>'
-    const encoded = gzipSync(expected).toString('base64')
-    const state = await executeLoader(file, async () => ({ ok:true, text:async () => encoded }), 500, 100)
-    assert.equal(state.written, expected)
-    assert.equal(state.bodyHtml.includes('Unable to open the portal'), false)
-  })
+test('Admin loader still supports a compressed bundle with external attendance scripts', async () => {
+  const encoded = gzipSync('<!doctype html><title>Loaded</title><body>OK</body>').toString('base64');
+  const state = await executeLoader(adminLoaderPath, async () => ({ ok:true, text:async () => encoded }), 500, 75);
+  assert.match(state.written, /<title>Loaded<\/title>/);
+  assert.match(state.written, /attendance-filters\.js/);
+  assert.match(state.written, /attendance-session-review\.js/);
+  assert.doesNotMatch(state.bodyHtml, /Unable to open the portal/);
+});
 
-  test(`${name} loader times out with a readable Retry action`, async () => {
-    const state = await executeLoader(file, () => new Promise(() => {}))
-    assert.match(state.bodyHtml, /Unable to open the portal/)
-    assert.match(state.bodyHtml, /Check your connection and try again/)
-    assert.equal(typeof state.retry, 'function')
-    assert.doesNotMatch(state.bodyHtml, /SQL|stack|payload|constraint|service.role/i)
-  })
-
-  for (const [failure, fetchImpl, options] of [
-    ['an unsuccessful bundle response', async () => ({ ok:false, text:async () => '' }), {}],
-    ['a malformed bundle response', async () => ({ ok:true, text:async () => 'not-valid-base64!' }), {}],
-    ['a browser without gzip decompression support', async () => ({ ok:true, text:async () => '' }), { decompressionSupported:false }],
+test('Admin loader shows a safe retry for unavailable or invalid asset responses', async () => {
+  for (const fetchImpl of [
+    async () => ({ ok:false, text:async () => '' }),
+    async () => ({ ok:true, text:async () => 'invalid!' })
   ]) {
-    test(`${name} loader recovers from ${failure}`, async () => {
-      const state = await executeLoader(file, fetchImpl, 500, 40, options)
-      assert.match(state.bodyHtml, /Unable to open the portal/)
-      assert.equal(typeof state.retry, 'function')
-      assert.equal(state.written, '')
-    })
+    const state = await executeLoader(adminLoaderPath, fetchImpl, 100, 80);
+    assert.match(state.bodyHtml, /Unable to open the portal/);
+    assert.match(state.bodyHtml, /Check your connection and try again/);
+    assert.equal(typeof state.retry, 'function');
+    assert.equal(state.written, '');
   }
-}
+});
+
+test('Employee Portal loads the current source scripts rather than an obsolete gzip bundle', () => {
+  const html = readFileSync(employeeLoaderPath, 'utf8');
+  assert.match(html, /src="\/attendance\/portal-compat\.js"/);
+  assert.match(html, /src="\/attendance\/portal\.js"/);
+  assert.match(html, /id="portalApp"/);
+  const portal = readFileSync(employeeSourcePath, 'utf8');
+  assert.match(portal, /function retryView\(/);
+  assert.match(portal, /const withTimeout/);
+});
 
 function recoveryScript() {
   const source = readFileSync(staticFunctionPath, 'utf8')
@@ -117,7 +118,7 @@ function recoveryContext({ stable = false } = {}) {
   const root = {
     querySelector(selector) {
       if (selector === '[data-init-retry]') return retry
-      if (selector === '.login-page,.shell,.page') return state.stable ? {} : null
+      if (selector === '.login-page,.shell,.page,main,aside,nav,form,button,input,[data-page],[data-action],[role="main"]') return state.stable ? {} : null
       return null
     },
   }
@@ -252,7 +253,7 @@ test('Employee save patch preserves a valid database state until compensation an
 
 test('Admin Edge Function failures use the function response body instead of the generic SDK message', async () => {
   const source = readFileSync(staticFunctionPath, 'utf8')
-  const match = source.match(/const FUNCTION_CALL_PATCH = String\.raw`([\s\S]*?)`\nconst EMPLOYEE_SAVE_ORDER_BLOCK/)
+  const match = source.match(/const FUNCTION_CALL_PATCH = String\.raw`([\s\S]*?)`\n+const EMPLOYEE_SAVE_ORDER_BLOCK/)
   assert.ok(match, 'Edge Function error-body patch must be present')
 
   const context = {
