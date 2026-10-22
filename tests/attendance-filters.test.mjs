@@ -9,7 +9,6 @@ const filters = readFileSync(new URL('../admin/attendance-filters.js', import.me
 test('Admin loader injects the external attendance filter script into the Admin bundle only', () => {
   assert.match(loader, /runtimePatch.*attendance-filters\.js/);
   assert.ok(loader.includes("html.replace(/<\\/body>/i,runtimePatch+'</body>')"));
-  assert.match(loader, /html\.replace\(\/<\\\/body>\/i,runtimePatch\+'<\/body>'\)/);
 });
 
 test('attendance controls include date, employee, attended-only and clearing', () => {
