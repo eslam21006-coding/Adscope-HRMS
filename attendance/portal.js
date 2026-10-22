@@ -301,6 +301,10 @@
     element.textContent = new Intl.DateTimeFormat('en-GB', {
       timeZone: cfg.timezone, weekday:'short', day:'2-digit', month:'short', hour:'2-digit', minute:'2-digit', hour12: portalTimeFormat() === '12'
     }).format(new Date());
+    const attendanceClock = document.getElementById('attendanceClock');
+    if (attendanceClock) attendanceClock.textContent = new Intl.DateTimeFormat('en-GB', {
+      timeZone: cfg.timezone, dateStyle: 'full', timeStyle: 'medium', hour12: portalTimeFormat() === '12'
+    }).format(new Date());
   }
 
   function updateShellState(page) {
