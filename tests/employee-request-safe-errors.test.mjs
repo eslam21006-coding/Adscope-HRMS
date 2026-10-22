@@ -19,7 +19,12 @@ test('permission/leave/advance rejection messages use fixed, understandable text
     ['Enter a corrected check-in or check-out time', 'Enter at least one corrected attendance time.'],
     ['Another pending or approved leave overlaps these dates', 'A pending or approved leave request already covers these dates.'],
     ['Insufficient leave balance', 'This request cannot be submitted with the current available balance.'],
-    ['Unsupported currency', 'The selected currency is not supported.']
+    ['Unsupported currency', 'The selected currency is not supported.'],
+    ['Appeal reason is required', 'Enter a reason for your appeal.'],
+    ['Reason is required', 'Select a date and enter a reason.'],
+    ['An active employee account is required', 'Your employee account is not active for Employee Portal access. Contact an Owner.'],
+    ['Case not found', 'This case could not be found. Refresh the page and try again.'],
+    ['Incident not found', 'This case could not be found. Refresh the page and try again.']
   ];
   for (const [raw, expected] of known) {
     assert.equal(friendlyError({ message: raw }), expected);
