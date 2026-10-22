@@ -25,7 +25,7 @@ test('employee self-service RPCs use production parameter names and employee sco
   assert.match(compat, /p_requested_end_time/);
   assert.match(compat, /p_corrected_check_in/);
   assert.match(compat, /p_corrected_check_out/);
-  assert.match(compat, /p_employee_id: currentEmployeeId/);
+  assert.doesNotMatch(compat, /p_employee_id\s*:/, 'employee self-service must rely on server identity');
   assert.match(compat, /p_document_path/);
   assert.match(compat, /p_deduction_month/);
 });
@@ -34,7 +34,8 @@ test('request retries reuse the same in-flight production RPC instead of creatin
   assert.match(compat, /const requestCache = new Map\(\)/);
   assert.match(compat, /REQUEST_DEDUPE_MS = 120000/);
   assert.match(compat, /return cached\.promise/);
-  assert.match(compat, /dedupedRpc\(originalRpc, name, normalized\)/);
+  assert.match(compat, /dedupedRpc\(originalRpc, name, normalized, requestCache\)/);
+  assert.match(compat, /if \(nextUserId !== currentUserId\) requestCache\.clear\(\)/);
 });
 
 test('attendance correction wall-clock values are reinterpreted in the organization timezone', () => {
@@ -60,7 +61,8 @@ test('notifications fall back from employee identity to signed-in user identity'
   assert.match(compat, /wrapNotificationQuery/);
   assert.match(compat, /employeeFilter/);
   assert.match(compat, /\.eq\('user_id', getUserId\(\)\)/);
-  assert.match(compat, /currentUserId = result\?\.data\?\.session\?\.user\?\.id/);
+  assert.match(compat, /const nextUserId = result\?\.data\?\.session\?\.user\?\.id/);
+  assert.match(compat, /currentUserId = nextUserId/);
 });
 
 test('ordinary violation responses cannot fall through to an appeal-only RPC', () => {
