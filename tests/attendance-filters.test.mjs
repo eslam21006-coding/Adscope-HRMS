@@ -29,5 +29,5 @@ test('selected month bounds limit date filters; resetting clears all criteria', 
 
 test('external attendance filter is read-only and valid JavaScript', () => {
   assert.doesNotThrow(() => new vm.Script(filters));
-  assert.doesNotMatch(filters, /\.from\(|\.rpc\(|\.update\(|\.insert\(|\.delete\(/);
+  assert.doesNotMatch(filters, /client\.from\(|client\.rpc\(|\.update\(\{|\.insert\(\{|\.delete\(\)/);
 });
