@@ -105,6 +105,7 @@
     if (/Active employee not found/i.test(raw)) return 'Your employee record is not active or linked correctly. Contact an Owner.';
     if (/Requested start time is required/i.test(raw)) return 'Select the requested start time.';
     if (/Requested leave time is required/i.test(raw)) return 'Select the requested end time.';
+    if (/Appeal reason is required/i.test(raw)) return 'Enter a reason for your appeal.';
     if (/Date and reason are required|Reason is required/i.test(raw)) return 'Select a date and enter a reason.';
     if (/Enter a corrected check-in or check-out time/i.test(raw)) return 'Enter at least one corrected attendance time.';
     if (/Enter a valid leave date range/i.test(raw)) return 'Select valid leave dates, with the end date on or after the start date.';
@@ -119,9 +120,10 @@
     if (/PGRST202|could not find the function|schema cache/i.test(raw) || error?.code === 'PGRST202') return 'The request service is temporarily unavailable. Contact an Owner if it persists.';
     if (/permission denied|not authorized|row-level security/i.test(raw)) return 'You do not have permission to perform this action.';
     if (/jwt.*expired|token.*expired|session.*expired/i.test(raw)) return 'Your session has expired. Sign in again and repeat the action.';
+    if (/An active employee account is required/i.test(raw)) return 'Your employee account is not active for Employee Portal access. Contact an Owner.';
+    if (/Case not found|Incident not found/i.test(raw)) return 'This case could not be found. Refresh the page and try again.';
     if (/The 24-hour appeal period has expired/i.test(raw)) return 'The 24-hour appeal period has expired. Contact an Owner for further review.';
     if (/This case is not accepting an appeal/i.test(raw)) return 'This case is not currently accepting an appeal.';
-    if (/Appeal reason is required/i.test(raw)) return 'Enter a reason for your appeal.';
     if (/already exists|duplicate/i.test(raw)) return 'This request appears to have already been submitted.';
     if (/overlap/i.test(raw)) return 'This request overlaps an existing request or attendance record.';
     if (/balance|insufficient/i.test(raw)) return 'This request cannot be submitted with the current available balance.';
@@ -443,7 +445,7 @@
 
   async function renderViolations() {
     const violations = await ownRows('violations', 100);
-    const rows = sortRows(violations.data).map(item => `<tr><td>${esc(item.violation_code || item.code || '—')}</td><td>${esc(item.violation_date || item.date || '—')}</td><td>${esc(String(item.violation_type || item.type_name || item.category || 'Violation').replaceAll('_',' '))}</td><td>${badge(item.workflow_status || item.status)}</td><td>${esc(item.description || item.allegation || item.reason || '')}</td><td>${['notified', 'under_review'].includes(String(item.workflow_status || '').toLowerCase()) ? `<button class="secondary" data-respond-violation="${esc(item.id)}" data-appeal-allowed="${item.workflow_status === 'notified' ? '1' : '0'}">Respond / Appeal</button>` : '—'}</td></tr>`).join('');
+    const rows = sortRows(violations.data).map(item => `<tr><td>${esc(item.violation_code || item.code || '—')}</td><td>${esc(item.violation_date || item.date || '—')}</td><td>${esc(String(item.violation_type || item.type_name || item.category || 'Violation').replaceAll('_',' '))}</td><td>${badge(item.workflow_status || item.status)}</td><td>${esc(item.description || item.allegation || item.reason || '')}</td><td>${['notified', 'under_review'].includes(String(item.workflow_status || '').toLowerCase()) ? `<button class="secondary" data-respond-violation="${esc(item.id)}" data-appeal-allowed="${String(item.workflow_status || '').toLowerCase() === 'notified' ? '1' : '0'}">${String(item.workflow_status || '').toLowerCase() === 'notified' ? 'Respond / Appeal' : 'Respond'}</button>` : '—'}</td></tr>`).join('');
     return `<section class="panel"><header class="panel-head"><div><h2>Violations & investigations</h2><p>You can view notices here and submit your response. Final sanctions remain subject to Owner review.</p></div></header>${violations.available ? `<div class="table-wrap"><table class="data-table"><thead><tr><th>Code</th><th>Date</th><th>Type</th><th>Status</th><th>Allegation</th><th>Action</th></tr></thead><tbody>${rows}</tbody></table>${rows ? '' : '<div class="empty">No violation notices are assigned to you.</div>'}</div>` : `<div class="panel-body">${sectionUnavailable('Violation records could not be loaded.')}</div>`}</section><div id="violationResponseHost"></div>`;
   }
 
@@ -668,7 +670,7 @@
   function bindViolations(content) {
     const host = content.querySelector('#violationResponseHost');
     content.querySelectorAll('[data-respond-violation]').forEach(button => button.onclick = () => {
-      host.innerHTML = `<section class="panel" style="margin-top:16px"><header class="panel-head"><div><h2>Respond to violation</h2><p>Your response is recorded for Owner review.</p></div></header><div class="panel-body"><form id="violationResponseForm" data-violation-id="${esc(button.dataset.respondViolation)}"><label class="field"><span>Your response / appeal</span><textarea name="response" required></textarea></label><label class="field"><span>Response type</span><select name="response_type"><option value="response">Response</option><option value="appeal">Appeal</option></select></label><button class="primary" type="submit">Submit response</button></form></div></section>`;
+      host.innerHTML = `<section class="panel" style="margin-top:16px"><header class="panel-head"><div><h2>Respond to violation</h2><p>Your response is recorded for Owner review.</p></div></header><div class="panel-body"><form id="violationResponseForm" data-violation-id="${esc(button.dataset.respondViolation)}"><label class="field"><span>Your response / appeal</span><textarea name="response" required></textarea></label><label class="field"><span>Response type</span><select name="response_type"><option value="response">Response</option><option value="appeal"${button.dataset.appealAllowed === '1' ? '' : ' disabled'}>Appeal</option></select></label><button class="primary" type="submit">Submit response</button></form></div></section>`;
       bindViolationResponse(host.querySelector('#violationResponseForm'));
       host.scrollIntoView({ behavior:'smooth', block:'nearest' });
     });
