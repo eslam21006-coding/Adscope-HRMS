@@ -25,6 +25,18 @@ BEGIN
     RAISE EXCEPTION 'An active employee account is required';
   END IF;
 
+  -- A suspended or portal-disabled employee must not submit appeals via RPC.
+  IF NOT EXISTS (
+    SELECT 1 FROM public.employees e
+    WHERE e.id = v_emp
+      AND e.organization_id = v_org
+      AND e.user_id = (SELECT auth.uid())
+      AND e.status = 'active'
+      AND e.portal_enabled = true
+  ) THEN
+    RAISE EXCEPTION 'An active employee account is required';
+  END IF;
+
   IF NULLIF(TRIM(p_appeal_reason), '') IS NULL THEN
     RAISE EXCEPTION 'Appeal reason is required';
   END IF;
