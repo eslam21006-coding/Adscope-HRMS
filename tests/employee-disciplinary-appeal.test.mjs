@@ -106,3 +106,37 @@ test('appeal eligibility uses case state, not an untrusted client device clock',
   assert.doesNotMatch(markup, /data-respond-violation="case-final"/);
   // The server, not device Date.now(), rejects cases past their appeal deadline.
 });
+
+test('appeal is disabled for under-review incidents while response remains available', () => {
+  const bindStart = portal.indexOf('function bindViolations(content)');
+  const bindEnd = portal.indexOf('function isRpcMismatch(error)', bindStart);
+  assert.ok(bindStart >= 0 && bindEnd > bindStart);
+  const bindViolations = vm.runInNewContext(
+    `${portal.slice(bindStart, bindEnd)}\nbindViolations`, {
+      esc: value => String(value ?? ''),
+      bindViolationResponse() {}
+    }
+  );
+  const collectMarkup = eligibility => {
+    const button = { dataset: { respondViolation: 'test-case', appealAllowed: eligibility } };
+    const host = {
+      innerHTML: '',
+      querySelector() { return {}; },
+      scrollIntoView() {}
+    };
+    bindViolations({
+      querySelector: () => host,
+      querySelectorAll: () => [button]
+    });
+    button.onclick();
+    return host.innerHTML;
+  };
+
+  const notified = collectMarkup('1');
+  assert.match(notified, /<option value="appeal">Appeal<\/option>/);
+  assert.doesNotMatch(notified, /<option value="appeal" disabled>/);
+
+  const underReview = collectMarkup('0');
+  assert.match(underReview, /<option value="appeal" disabled>Appeal<\/option>/);
+  assert.match(underReview, /<option value="response">Response<\/option>/);
+});
