@@ -70,8 +70,14 @@ test('migration scopes appeal privilege to the existing server-checked function'
   assert.match(migration, /SECURITY DEFINER/);
   assert.match(migration, /v\.appeal_deadline_at IS NULL OR NOW\(\) > v\.appeal_deadline_at/);
   assert.match(migration, /FROM anon;/);
-  assert.doesNotMatch(migration, /employee_response\s*=/, 'appeal reason must not overwrite employee response');
-  assert.match(migration, /recipient_user_id|employee_id = v_emp/);
+  const appealStart = migration.indexOf('CREATE OR REPLACE FUNCTION public.submit_disciplinary_appeal');
+  const appealEnd = migration.indexOf('$function$;', appealStart);
+  assert.ok(appealStart >= 0 && appealEnd > appealStart, 'Appeal RPC must be extractable');
+  const appealFunction = migration.slice(appealStart, appealEnd);
+  assert.doesNotMatch(appealFunction, /employee_response\s*=/, 'appeal reason must not overwrite employee response');
+  assert.match(appealFunction, /employee_id = v_emp/);
+  assert.match(appealFunction, /organization_id = v_org/);
+  assert.match(appealFunction, /PERFORM app_private\.notify_owners\(/);
   assert.match(migration, /REVOKE ALL ON FUNCTION public\.submit_disciplinary_appeal/);
   assert.doesNotMatch(migration, /DISABLE ROW LEVEL SECURITY|CREATE POLICY/i);
 });
