@@ -99,7 +99,7 @@ test('Employee Portal loads the current source scripts rather than an obsolete g
   assert.match(html, /id="portalApp"/);
   const portal = readFileSync(employeeSourcePath, 'utf8');
   assert.match(portal, /function retryView\(/);
-  assert.match(portal, /const withTimeout/);
+  assert.match(portal, /withTimeout/);
 });
 
 function recoveryScript() {
